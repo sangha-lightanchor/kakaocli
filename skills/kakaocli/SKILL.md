@@ -1,79 +1,39 @@
 ---
 name: kakaocli
-description: Send and receive KakaoTalk messages via CLI
-version: 0.5.0
-requires:
-  binaries:
-    - kakaocli
-  platform: darwin
-tags:
-  - messaging
-  - kakaotalk
-  - korea
+description: Read local KakaoTalk history by stable chat ID and safely send approved stdin to an exact chat ID or self-chat.
 ---
 
-# KakaoTalk CLI Skill
+# kakaocli
 
-Read and send KakaoTalk messages from the command line. Requires macOS with KakaoTalk desktop app installed. Auto-launches and auto-logs in when credentials are stored.
+Use `kakaocli chats --search "name" --json` only to discover the stable ID.
+Read with `kakaocli messages --chat-id ID --since 24h --json`.
 
-## Setup (Required First Time)
+For any non-self send, obtain approval of the exact message and exact chat ID.
+Then pipe the exact UTF-8 message through stdin and supply a fresh UUID:
 
 ```bash
-# Store credentials for auto-login
-kakaocli login --email user@example.com --password yourpassword
+printf '%s' 'approved exact text' | \
+  kakaocli send --chat-id 123456 --stdin --request-id "$(uuidgen)" --json
 ```
 
-## Available Commands
+Live testing is self-chat only:
 
-### Check Status
 ```bash
-kakaocli login --status
+printf '%s' 'self-chat test' | \
+  kakaocli send --self --stdin --request-id "$(uuidgen)" --json
 ```
 
-### List Chats
+Treat `confirmed` as delivered only after its `log_id` is present. Treat
+`unknown` as possibly delivered: never retry it automatically or with a new
+request ID. Inspect the exact chat first.
+
+Never try to make KakaoTalk visible through automation. If kakaocli reports
+that the app or main window is unavailable, ask the user to foreground it
+manually and leave the window rendered.
+
+Archive access is explicit:
+
 ```bash
-kakaocli chats --json
+kakaocli config allow-chat 123456
+kakaocli archive status --json
 ```
-
-### Read Messages
-```bash
-kakaocli messages --chat "Name" --since 1h --json
-```
-
-### Send Message
-```bash
-kakaocli send "Name" "Your message here"
-```
-
-### Send to Self-Chat (Testing)
-```bash
-kakaocli send x --me "Test message"
-```
-
-### Watch for New Messages
-```bash
-kakaocli sync --follow
-```
-
-### Search Messages
-```bash
-kakaocli search "keyword" --json
-```
-
-### Harvest Chat Names & History
-```bash
-# Capture display names for all chats
-kakaocli harvest
-
-# Full harvest with scroll + history loading
-kakaocli harvest --scroll --top 20
-```
-
-## Usage Guidelines
-
-- Always confirm before sending messages to others
-- Use `--me` flag and `--dry-run` for testing
-- Rate limit: max 1 message per 2 seconds
-- Don't send messages between 11 PM and 7 AM unless urgent
-- KakaoTalk is auto-launched and auto-logged-in when credentials are stored
-- First-time setup requires `kakaocli login --email ... --password ...`

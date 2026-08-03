@@ -22,7 +22,12 @@ let package = Package(
         ),
         .target(
             name: "KakaoCore",
-            dependencies: ["CSQLCipher"]
+            dependencies: ["CSQLCipher"],
+            linkerSettings: [
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("AppKit"),
+                .linkedFramework("Security"),
+            ]
         ),
         .systemLibrary(
             name: "CSQLCipher",

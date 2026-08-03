@@ -199,7 +199,7 @@ public enum DeviceInfo {
         guard hexHash.count == 128 else { return nil }
         // Parse target hash to bytes
         var targetBytes = [UInt8](repeating: 0, count: 64)
-        var hexChars = Array(hexHash)
+        let hexChars = Array(hexHash)
         for i in 0..<64 {
             guard let byte = UInt8(String(hexChars[i*2...i*2+1]), radix: 16) else { return nil }
             targetBytes[i] = byte

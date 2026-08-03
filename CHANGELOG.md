@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0 — Safe local rebuild
+
+- Added the concurrency-safe `KakaoClient` actor and stable send types.
+- Restricted sends to exact chat IDs or self-chat, with stdin bodies and
+  caller-supplied request IDs.
+- Added whole-transaction process locking, fail-closed UI proof, exact database
+  confirmation, and durable `confirmed`/`unknown` receipts.
+- Removed app lifecycle automation, name/substring sending, harvest UI actions,
+  and all foreground/global input paths.
+- Added the optional user-only Unix-socket service, vnode database/WAL events,
+  encrypted allowlisted archive, verified content-addressed media, generic
+  durable webhook, and idempotent local migration.
+
 ### v0.5.0 - Chat Harvest (Phase 4)
 - `harvest` command: bulk-capture chat display names and load message history
 - Vision framework OCR to locate "View Previous Chats" button

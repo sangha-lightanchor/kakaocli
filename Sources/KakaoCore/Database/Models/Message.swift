@@ -1,17 +1,42 @@
 import Foundation
 
-/// A KakaoTalk message.
-public struct Message: Sendable {
+/// A KakaoTalk message read from the local database.
+public struct Message: Codable, Sendable, Equatable {
     public let id: Int64
-    public let chatId: Int64
+    public let chatId: ChatID
     public let senderId: Int64
     public let senderName: String?
     public let text: String?
     public let type: MessageType
     public let createdAt: Date
     public let isFromMe: Bool
+    /// Raw attachment metadata. It is retained only inside the encrypted state
+    /// database and is never included in webhook payloads.
+    public let rawAttachment: String?
 
-    public enum MessageType: Int, Sendable {
+    public init(
+        id: Int64,
+        chatId: ChatID,
+        senderId: Int64,
+        senderName: String?,
+        text: String?,
+        type: MessageType,
+        createdAt: Date,
+        isFromMe: Bool,
+        rawAttachment: String? = nil
+    ) {
+        self.id = id
+        self.chatId = chatId
+        self.senderId = senderId
+        self.senderName = senderName
+        self.text = text
+        self.type = type
+        self.createdAt = createdAt
+        self.isFromMe = isFromMe
+        self.rawAttachment = rawAttachment
+    }
+
+    public enum MessageType: Int, Codable, Sendable {
         case text = 1
         case photo = 2
         case video = 3

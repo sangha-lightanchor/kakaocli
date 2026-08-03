@@ -104,7 +104,7 @@
 
   <!-- Command 4: send -->
   <text class="prompt" x="16" y="478">$</text>
-  <text class="cmd" x="28" y="478">kakaocli send "김지수" "내일 점심 같이 먹자!"</text>
+  <text class="cmd" x="28" y="478">printf message | kakaocli send --chat-id 123 --request-id UUID</text>
 
   <text class="dim" x="16" y="502">Opening chat: 김지수...</text>
   <text class="dim" x="16" y="522">Message sent.</text>

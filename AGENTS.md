@@ -1,244 +1,66 @@
-# AGENTS.md — KakaoCLI for AI Agents
+# AGENTS.md — kakaocli safety contract
 
-Instructions for AI agents that want to read and send KakaoTalk messages.
-
-## Prerequisites
-
-- macOS 14+ with KakaoTalk desktop app installed
-- `kakaocli` binary built and in PATH (or run via `swift run kakaocli`)
-- System Settings > Privacy & Security: **Full Disk Access** + **Accessibility** granted to your terminal
-- KakaoTalk credentials stored (see First-Time Setup below)
-
-## First-Time Setup
-
-Before using kakaocli, store credentials so the tool can auto-login:
+## Build and test
 
 ```bash
-# Store KakaoTalk credentials (saved in macOS Keychain)
-kakaocli login --email user@example.com --password yourpassword
-
-# Verify everything is working
-kakaocli login --status
-# Expected output includes: "Stored credentials: Yes"
+swift build
+swift test
+swift build -c release
 ```
 
-**Important for AI agents:** The `--password` flag is required in non-interactive contexts (scripts, automation, Claude Code). The interactive `kakaocli login` prompt uses `getpass()` which doesn't work outside a real terminal.
+The only package dependency is Apple's Swift Argument Parser. SQLCipher is a
+Homebrew system library.
 
-### Credential Storage
+## Non-negotiable send behavior
 
-- Stored in macOS login Keychain under service `com.kakaocli.credentials`
-- Two items: `kakaotalk-email` and `kakaotalk-password`
-- Persists across reboots, encrypted by macOS (AES-256-GCM)
-- Accessible by any process running as the current macOS user
-- Uses `security` CLI tool (not Security.framework) to avoid code-signing ACL issues
+- Sending accepts only a stable `chat_id` or `--self`. Never add name,
+  substring, position, or first-match sending.
+- Message content comes from stdin. Never add a positional message argument.
+- Every send requires a caller-supplied UUID request ID.
+- Hold the actor queue and cross-process file lock for the entire transaction,
+  including database confirmation.
+- Never launch or activate KakaoTalk, raise a window, move the cursor, or post
+  global keyboard/mouse input. Users may foreground KakaoTalk themselves.
+- Reject unrelated open rooms. Reuse one exact target room only when it has one
+  verified empty composer.
+- Resolve an ID through the database, then require exactly one matching UI row.
+  Verify row selection, focus, the new room title, composer identity, body, and
+  focus again before invoking a control.
+- Invoke only one exact enabled Send/전송 control. If it is absent, Return may
+  be delivered only to KakaoTalk's PID after the exact composer remains focused.
+- Snapshot the intended chat's log-ID high-water mark before composing and
+  confirm exact outgoing UTF-8 bytes only under that same chat ID.
+- Return `confirmed` or `unknown`. Persist both. Never automatically retry an
+  `unknown` result, and never reuse a request ID with different content.
+- Live tests are self-chat only. Never send a test to another person's room.
 
-To inspect or manage credentials manually:
-```bash
-# Read stored email
-security find-generic-password -s "com.kakaocli.credentials" -a "kakaotalk-email" -w
+`Tests/KakaoCoreTests/SafetySourceGuardTests.swift` prevents activation,
+raising, cursor, global-event, and removed-option regressions.
 
-# Delete stored credentials
-security delete-generic-password -s "com.kakaocli.credentials" -a "kakaotalk-email"
-security delete-generic-password -s "com.kakaocli.credentials" -a "kakaotalk-password"
-```
+## Archive and service
 
-## Automatic Lifecycle Management
+- The optional service owns one read-only Kakao SQLCipher connection, listens
+  on a user-only Unix socket, and uses the same send file lock as direct CLI
+  calls.
+- Watch the database and WAL with debounced vnode notifications and a
+  60-second reconciliation backstop. Do not restore rapid polling.
+- Archive only explicitly allowlisted chat IDs.
+- Keep raw attachment metadata only in encrypted state. Normalize links,
+  previews, photos, multi-photo, video, audio, files, stickers, and supported
+  local paths.
+- Media retrieval is HTTPS-only. Verify reported byte count/checksum, compute
+  SHA-256, and deduplicate into content-addressed storage.
+- Retain metadata on expiration, verification failure, or low disk. Never
+  delete retained messages/media automatically.
+- Webhooks remain disabled until freshly configured. Payloads may contain text,
+  normalized metadata, archive status, and hashes; never binaries, signed CDN
+  URLs, or local paths. Use the durable outbox and idempotency headers.
 
-You do **NOT** need to manually launch or log into KakaoTalk. The tool handles it automatically:
+## Local paths
 
-| Situation | What happens |
-|-----------|-------------|
-| App not running | Launches KakaoTalk via `NSWorkspace` |
-| Login screen showing | Auto-fills credentials and clicks "Log in" |
-| "Keep me logged in" | Checked automatically — future launches skip login |
-| Window hidden (menu bar only) | Detects state via status bar menu items |
-| Already logged in | Proceeds immediately |
+- state/config: `~/.kakaocli/`
+- socket: `~/.kakaocli/run/kakaocli.sock`
+- media: `~/.local/share/kakaocli/archive/`
 
-The first auto-login after a fresh install takes 5-10 seconds. With "Keep me logged in" checked, subsequent launches are near-instant.
-
-### App State Detection
-
-```bash
-kakaocli login --status
-```
-
-| State | Meaning |
-|-------|---------|
-| `loggedIn` | Ready to use |
-| `loginScreen` | Needs login (will auto-login if credentials stored) |
-| `notRunning` | KakaoTalk not running (will auto-launch on next command) |
-| `launching` | App starting up |
-| `unknown` | Transient state during transitions |
-
-### Known AX Quirks
-
-KakaoTalk's macOS Accessibility (AX) hierarchy is non-standard:
-- `kAXWindowsAttribute` may return `AXApplication` elements instead of `AXWindow`
-- When the window is hidden (app running in menu bar), there are zero real AXWindow elements
-- The **status bar menu** is the most reliable state indicator ("Log out" present = logged in)
-- After login, the window briefly disappears during the transition — don't poll aggressively
-
-## Quick Start
-
-```bash
-# Verify database access
-kakaocli auth
-
-# List recent chats
-kakaocli chats --json
-
-# Read messages from a specific chat
-kakaocli messages --chat "Mom" --since 1h --json
-
-# Send a message (auto-launches and logs in if needed)
-kakaocli send "Mom" "I'll be home soon"
-
-# Send to self-chat (for testing — ALWAYS use this for tests)
-kakaocli send x --me "Test message"
-
-# Watch for new messages (NDJSON stream)
-kakaocli sync --follow
-```
-
-## Reading Messages
-
-### List Chats
-```bash
-kakaocli chats --json --limit 20
-```
-Returns: `[{"id", "type", "display_name", "member_count", "unread_count", "last_message_at"}]`
-
-### Read Messages
-```bash
-kakaocli messages --chat "Name" --since 1h --json
-kakaocli messages --chat-id 12345 --limit 100 --json
-```
-Returns: `[{"id", "chat_id", "sender_id", "sender", "text", "type", "timestamp", "is_from_me"}]`
-
-### Search
-```bash
-kakaocli search "keyword" --json
-```
-
-## Sending Messages
-
-```bash
-kakaocli send "Chat Name" "Message text"
-kakaocli send x --me "Self-chat message"    # --me flag for self-chat
-kakaocli send "Mom" "Hello" --dry-run       # Preview without sending
-```
-
-**Important constraints:**
-- KakaoTalk is auto-launched if needed (no need to start it manually)
-- UI automation needs Accessibility permission granted to your terminal
-- Rate limit: wait at least 2 seconds between sends
-- The chat window opens, types, sends, then closes automatically
-- The `--me` flag sends to self-chat regardless of the chat name argument (use `_` as placeholder)
-
-## Sync Mode (Real-Time Monitoring)
-
-### NDJSON Stream
-```bash
-kakaocli sync --follow
-```
-Outputs one JSON object per line (NDJSON) for each new message:
-```json
-{"type":"message","log_id":123,"chat_id":456,"chat_name":"Mom","sender_id":789,"sender":"Mom","text":"Are you coming?","message_type":1,"timestamp":"2026-02-20T10:30:00Z","is_from_me":false}
-```
-
-### With Webhook
-```bash
-kakaocli sync --follow --webhook http://localhost:8080/kakao
-```
-POSTs batches of new messages as JSON arrays to the webhook URL.
-
-### Options
-- `--interval <seconds>` — Poll frequency (default: 2s)
-- `--since-log-id <id>` — Start from a specific point instead of latest
-- `--webhook <url>` — POST new messages to this URL
-
-### One-Shot Status
-```bash
-kakaocli sync
-```
-Returns: `{"status":"ready","max_log_id":12345}` — useful for getting the current high-water mark.
-
-## Agent Integration Pattern
-
-Typical agent loop:
-
-```python
-import subprocess, json
-
-# 1. Check for new messages
-proc = subprocess.run(["kakaocli", "messages", "--since", "5m", "--json"],
-                      capture_output=True, text=True)
-messages = json.loads(proc.stdout)
-
-# 2. Process and respond
-for msg in messages:
-    if not msg["is_from_me"] and needs_response(msg):
-        subprocess.run(["kakaocli", "send", msg["chat_name"], response_text])
-```
-
-Or use sync mode for real-time:
-
-```bash
-kakaocli sync --follow | while read -r line; do
-  echo "$line" | jq -r '.text' | process_message
-done
-```
-
-## Harvest (Bulk Chat History)
-
-The `harvest` command automates bulk extraction of chat display names and message history loading.
-
-### Names Only (Fast)
-```bash
-kakaocli harvest
-```
-Captures display names for all chats from the UI (many group chats show `(unknown)` in the DB). Saves to `~/.kakaocli/metadata.json`.
-
-### Full History Loading
-```bash
-kakaocli harvest --scroll --max-clicks 5
-```
-Opens each chat, scrolls to top, and clicks "View Previous Chats" to load older messages from the server. Automatically handles Talk Drive Plus paywall popups.
-
-### Options
-- `--top <N>` — Process only top N most recent chats
-- `--scroll` — Enable full scroll + click mode (without this, only captures names)
-- `--max-clicks <N>` — Max "View Previous Chats" clicks per chat (default: 10)
-- `--scroll-delay <seconds>` — Delay between actions (default: 1.5s)
-- `--dry-run` — Preview without making changes
-
-### Output
-Returns JSON array with per-chat results:
-```json
-[{"chatId": 123, "name": "Chat Name", "messagesBefore": 48, "messagesAfter": 148, "newMessages": 100, "skipped": false}]
-```
-
-### Notes
-- Chats with unread messages are automatically skipped (to avoid marking them as read)
-- The Talk Drive Plus paywall blocks loading older messages — the tool detects and dismisses it
-- Uses Vision OCR + CGEvent clicks for reliable UI interaction
-- Metadata saved to `~/.kakaocli/metadata.json`
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `Keychain error` | Run `kakaocli login --clear` then re-store credentials |
-| `No login window found` | KakaoTalk window may be hidden — run `kakaocli login --status` to check |
-| `Login did not succeed` | Verify credentials: `kakaocli login --email ... --password ...` |
-| `Chat not found` | Use exact substring match — run `kakaocli chats` to see available names |
-| `No open windows` | KakaoTalk may need manual interaction first time — open it once manually |
-| Login works but send fails | Window may need time to load — retry after 2-3 seconds |
-
-## Safety Rules
-
-1. **Never send test messages to other people's chats.** Use `--me` flag for testing.
-2. **Always use `--dry-run` first** when testing new send logic.
-3. **Rate limit sends** — at least 2 seconds between messages.
-4. **Respect hours** — avoid sending between 11 PM and 7 AM unless urgent.
-5. **Confirm before sending** — agents should verify message content with the user before sending to others.
+Machine-specific IDs, database keys, state keys, and webhook secrets stay
+local and uncommitted.

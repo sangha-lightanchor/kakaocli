@@ -34,6 +34,7 @@ No external dependencies besides `sqlcipher` (Homebrew). The `CSQLCipher` system
 - **Status bar menu**: Most reliable way to check login state — "Log out" = logged in
 - **Window may not appear**: After clicking "Open KakaoTalk" in status bar, the AXWindow may take several seconds to materialize or may not appear at all
 - **Opening chats**: Use AX row selection (`kAXSelectedRowsAttribute`) + Enter key, NOT `doubleClickElement`. CGEvent double-click fails when the row is scrolled off-screen (AX reports coordinates outside the visible area). AX selection works regardless of scroll position.
+- **Background sends**: Use PID-targeted mouse/key events plus direct AX composer and Send actions. Never activate KakaoTalk or post global events from the background path.
 - **Paywall popup**: 500x500 blank window at (0,482), invisible to AX, visible to CGWindow API. Dismiss with Escape — but be careful, Escape can also close the main window.
 
 ### Credential Storage
@@ -44,7 +45,7 @@ No external dependencies besides `sqlcipher` (Homebrew). The `CSQLCipher` system
 
 ### App Lifecycle
 - `AppLifecycle.detectState(aggressive:)` — `aggressive: true` tries to show hidden window, `false` just checks
-- `AppLifecycle.ensureReady()` — called before all send operations; handles launch + login
+- `AppLifecycle.ensureReady()` — used by explicit foreground send mode; handles launch + login
 - `LoginAutomator.login()` — fills credentials, clicks login, polls status bar for completion
 - After login button click, the window disappears during transition — poll with non-aggressive mode
 - "Keep me logged in" checkbox is auto-checked — subsequent launches skip login
@@ -83,4 +84,5 @@ No external dependencies besides `sqlcipher` (Homebrew). The `CSQLCipher` system
 
 - **NEVER send test messages to other people's chats.** Use `--me` flag for self-chat only.
 - Always close existing chat windows before opening a new one (prevents sending to wrong window).
+- `send` is strict background-only by default. If KakaoTalk has no rendered main window, fail closed; `--foreground` is an explicit setup/recovery opt-in and must never be added silently.
 - The `inspect --open-chat` command double-clicks a chat row - treat it as a UI action that could trigger side effects.

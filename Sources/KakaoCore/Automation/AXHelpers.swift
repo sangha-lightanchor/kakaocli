@@ -104,6 +104,25 @@ public enum AXHelpers {
         AXUIElementPerformAction(element, action as CFString) == .success
     }
 
+    /// Return the actions exposed by an accessibility element.
+    public static func actionNames(_ element: AXUIElement) -> [String] {
+        var value: CFArray?
+        let result = AXUIElementCopyActionNames(element, &value)
+        guard result == .success else { return [] }
+        return value as? [String] ?? []
+    }
+
+    /// Check whether an accessibility attribute can be changed.
+    public static func isAttributeSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
+        var settable: DarwinBoolean = false
+        let result = AXUIElementIsAttributeSettable(
+            element,
+            attribute as CFString,
+            &settable
+        )
+        return result == .success && settable.boolValue
+    }
+
     /// Set focus on an element.
     public static func focus(_ element: AXUIElement) -> Bool {
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success
@@ -407,6 +426,43 @@ public enum AXHelpers {
             up.flags = flags
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Press a key for one application without changing the frontmost app.
+    public static func pressKey(
+        keyCode: CGKeyCode,
+        flags: CGEventFlags = [],
+        processIdentifier: pid_t
+    ) {
+        if let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
+           let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) {
+            down.flags = flags
+            up.flags = flags
+            down.postToPid(processIdentifier)
+            up.postToPid(processIdentifier)
+        }
+    }
+
+    /// Click an element for one application without moving the system cursor or
+    /// changing the frontmost app.
+    public static func clickElement(_ element: AXUIElement, processIdentifier: pid_t) {
+        guard let pos = position(element), let sz = size(element) else { return }
+        let center = CGPoint(x: pos.x + sz.width / 2, y: pos.y + sz.height / 2)
+        if let mouseDown = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: center,
+            mouseButton: .left
+        ), let mouseUp = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .leftMouseUp,
+            mouseCursorPosition: center,
+            mouseButton: .left
+        ) {
+            mouseDown.postToPid(processIdentifier)
+            usleep(50000)
+            mouseUp.postToPid(processIdentifier)
         }
     }
 

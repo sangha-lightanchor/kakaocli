@@ -44,12 +44,14 @@ security delete-generic-password -s "com.kakaocli.credentials" -a "kakaotalk-pas
 
 ## Automatic Lifecycle Management
 
-You do **NOT** need to manually launch or log into KakaoTalk. The tool handles it automatically:
+Foreground-capable commands can launch and log into KakaoTalk automatically.
+The default `send` command deliberately does not use this lifecycle path; it
+fails closed when KakaoTalk's main window is not already rendered.
 
 | Situation | What happens |
 |-----------|-------------|
-| App not running | Launches KakaoTalk via `NSWorkspace` |
-| Login screen showing | Auto-fills credentials and clicks "Log in" |
+| App not running | Foreground mode launches KakaoTalk; default `send` fails closed |
+| Login screen showing | Foreground mode auto-fills credentials and clicks "Log in" |
 | "Keep me logged in" | Checked automatically — future launches skip login |
 | Window hidden (menu bar only) | Detects state via status bar menu items |
 | Already logged in | Proceeds immediately |
@@ -66,7 +68,7 @@ kakaocli login --status
 |-------|---------|
 | `loggedIn` | Ready to use |
 | `loginScreen` | Needs login (will auto-login if credentials stored) |
-| `notRunning` | KakaoTalk not running (will auto-launch on next command) |
+| `notRunning` | KakaoTalk not running (default `send` will fail; foreground mode can launch it) |
 | `launching` | App starting up |
 | `unknown` | Transient state during transitions |
 
@@ -90,8 +92,11 @@ kakaocli chats --json
 # Read messages from a specific chat
 kakaocli messages --chat "Mom" --since 1h --json
 
-# Send a message (auto-launches and logs in if needed)
+# Send in the background (KakaoTalk main window must already be rendered)
 kakaocli send "Mom" "I'll be home soon"
+
+# Explicitly opt into auto-launch/foreground activation for setup or recovery
+kakaocli send "Mom" "I'll be home soon" --foreground
 
 # Send to self-chat (for testing — ALWAYS use this for tests)
 kakaocli send x --me "Test message"
@@ -126,10 +131,14 @@ kakaocli search "keyword" --json
 kakaocli send "Chat Name" "Message text"
 kakaocli send x --me "Self-chat message"    # --me flag for self-chat
 kakaocli send "Mom" "Hello" --dry-run       # Preview without sending
+kakaocli send "Mom" "Hello" --foreground     # Explicitly allow activation
 ```
 
 **Important constraints:**
-- KakaoTalk is auto-launched if needed (no need to start it manually)
+- `send` is background-only by default and does not activate KakaoTalk or move the system cursor
+- KakaoTalk must already be running with its main window rendered; it may remain behind other apps
+- If the background controls are unavailable, `send` fails closed instead of stealing focus
+- `--foreground` is an explicit setup/recovery fallback that may launch and activate KakaoTalk
 - UI automation needs Accessibility permission granted to your terminal
 - Rate limit: wait at least 2 seconds between sends
 - The chat window opens, types, sends, then closes automatically
@@ -233,6 +242,7 @@ Returns JSON array with per-chat results:
 | `Login did not succeed` | Verify credentials: `kakaocli login --email ... --password ...` |
 | `Chat not found` | Use exact substring match — run `kakaocli chats` to see available names |
 | `No open windows` | KakaoTalk may need manual interaction first time — open it once manually |
+| `Background send unavailable` | Open KakaoTalk once, leave its main window rendered, switch back to your work, and retry. Use `--foreground` only with explicit approval. |
 | Login works but send fails | Window may need time to load — retry after 2-3 seconds |
 
 ## Safety Rules
@@ -242,3 +252,4 @@ Returns JSON array with per-chat results:
 3. **Rate limit sends** — at least 2 seconds between messages.
 4. **Respect hours** — avoid sending between 11 PM and 7 AM unless urgent.
 5. **Confirm before sending** — agents should verify message content with the user before sending to others.
+6. **Do not add `--foreground` silently.** A default send must fail rather than interrupt the user's active app.

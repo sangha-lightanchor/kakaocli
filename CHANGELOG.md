@@ -1,5 +1,9 @@
 # Changelog
 
+### Unreleased
+- Strict background-only sending by default, with PID-targeted input and direct Accessibility composer/Send actions
+- Fail-closed behavior when KakaoTalk has no rendered main window; foreground activation now requires explicit `send --foreground`
+
 ### v0.5.0 - Chat Harvest (Phase 4)
 - `harvest` command: bulk-capture chat display names and load message history
 - Vision framework OCR to locate "View Previous Chats" button

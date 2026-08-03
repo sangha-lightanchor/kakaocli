@@ -109,8 +109,11 @@ kakaocli search "점심"
 # Read recent messages from a chat (substring match on name)
 kakaocli messages --chat "지수" --since 7d
 
-# Send a message (opens KakaoTalk UI automatically)
+# Send without bringing KakaoTalk to the foreground (default)
 kakaocli send "지수" "안녕!"
+
+# Explicit legacy fallback when opening/activating KakaoTalk is acceptable
+kakaocli send --foreground "지수" "안녕!"
 
 # Send to self-chat (나와의 채팅) — safe for testing
 kakaocli send --me _ "test message"
@@ -149,7 +152,16 @@ All read commands support `--json` for structured output.
 kakaocli send "chat name" "message"    # Send to a chat
 kakaocli send --me _ "message"         # Send to self-chat (나와의 채팅)
 kakaocli send --dry-run "name" "msg"   # Preview without sending
+kakaocli send --foreground "name" "msg" # Opt into foreground activation
 ```
+
+`send` is background-only by default: it posts input events directly to the
+KakaoTalk process, sets the composer through Accessibility, and invokes the
+Send control without activating KakaoTalk or moving the system cursor. KakaoTalk
+must already be running with its main window rendered; the window may remain
+behind other apps. If the app is closed or its main window is fully hidden,
+the command fails instead of stealing focus. `--foreground` explicitly opts
+into the legacy auto-launch/activation path for setup or recovery.
 
 ### Sync / 동기화
 
@@ -187,11 +199,17 @@ kakaocli login --status                               # Check status
 kakaocli login --clear                                # Remove credentials
 ```
 
-When you run `send`, `sync`, or any command that needs KakaoTalk, the tool automatically launches the app, detects the login screen, fills credentials, and waits for login to complete.
+Foreground-capable commands such as `send --foreground` can launch KakaoTalk,
+detect the login screen, fill stored credentials, and wait for login to
+complete. The default background-only `send` never launches or activates the
+app; it fails closed when the main window is unavailable.
 
 ## AI Integration / AI 연동
 
-kakaocli is designed to work with AI coding assistants and agents. Every read command outputs structured JSON, and the tool handles KakaoTalk's full lifecycle automatically (launch, login, window management).
+kakaocli is designed to work with AI coding assistants and agents. Every read
+command outputs structured JSON. Foreground-capable commands can manage
+KakaoTalk's launch, login, and windows; background-only sends deliberately do
+not enter that lifecycle path.
 
 ### Claude Code
 
@@ -267,7 +285,7 @@ kakaocli는 카카오톡의 로컬 SQLCipher 암호화 데이터베이스를 **�
 
 - **Incomplete message history.** KakaoTalk Mac only syncs messages from the server when you open a chat. If you haven't opened a chat on your Mac in a while (or ever), older messages won't be in the local database. Use `kakaocli harvest --scroll` to trigger loading older history, but this is limited by KakaoTalk's own sync behavior and the Talk Drive Plus paywall.
 - **Group chat names may show as `(unknown)`.** The database doesn't always store display names for group chats. Run `kakaocli harvest` to capture names from the UI.
-- **Sending requires KakaoTalk to be running.** Read commands work without the app open, but `send`, `sync`, and `harvest` need the KakaoTalk window. kakaocli launches and logs in automatically if credentials are stored.
+- **Background sending requires a rendered KakaoTalk main window.** The default `send` never activates KakaoTalk and fails closed if the app or main window is unavailable. Use `send --foreground` only when explicit auto-launch/activation is acceptable. Read commands work from the local database; `harvest` still requires foreground UI automation.
 - **One Mac at a time.** KakaoTalk only allows one Mac logged in per account.
 - **Media and non-text messages.** Currently only text messages are fully supported. Photos, videos, stickers, and other media types are visible in the database but not rendered.
 
@@ -276,7 +294,7 @@ kakaocli는 카카오톡의 로컬 SQLCipher 암호화 데이터베이스를 **�
 
 - **불완전한 메시지 기록.** 카카오톡 Mac은 채팅을 열어야 서버에서 메시지를 동기화합니다. Mac에서 오래 열지 않은 채팅은 이전 메시지가 로컬 데이터베이스에 없을 수 있습니다. `kakaocli harvest --scroll`로 이전 메시지 로드를 시도할 수 있지만, 카카오톡 자체 동기화 및 톡드라이브 플러스 페이월에 의해 제한됩니다.
 - **그룹 채팅 이름이 `(unknown)`으로 표시될 수 있습니다.** `kakaocli harvest`를 실행하여 UI에서 이름을 수집하세요.
-- **전송 시 카카오톡 실행 필요.** 읽기 명령은 앱 없이 작동하지만, `send`, `sync`, `harvest`는 카카오톡 창이 필요합니다.
+- **백그라운드 전송 시 카카오톡 메인 창 필요.** 기본 `send`는 카카오톡을 활성화하지 않으며 앱이나 메인 창을 사용할 수 없으면 전송하지 않고 실패합니다. 자동 실행·활성화를 명시적으로 허용할 때만 `send --foreground`를 사용하세요. `harvest`는 계속 포그라운드 UI 자동화가 필요합니다.
 - **계정당 Mac 1대.** 카카오톡은 계정당 하나의 Mac만 로그인을 허용합니다.
 - **미디어 및 비텍스트 메시지.** 현재 텍스트 메시지만 완전히 지원됩니다.
 

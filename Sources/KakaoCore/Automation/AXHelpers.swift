@@ -104,6 +104,25 @@ public enum AXHelpers {
         AXUIElementPerformAction(element, action as CFString) == .success
     }
 
+    /// Return the actions exposed by an accessibility element.
+    public static func actionNames(_ element: AXUIElement) -> [String] {
+        var value: CFArray?
+        let result = AXUIElementCopyActionNames(element, &value)
+        guard result == .success else { return [] }
+        return value as? [String] ?? []
+    }
+
+    /// Check whether an accessibility attribute can be changed.
+    public static func isAttributeSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
+        var settable: DarwinBoolean = false
+        let result = AXUIElementIsAttributeSettable(
+            element,
+            attribute as CFString,
+            &settable
+        )
+        return result == .success && settable.boolValue
+    }
+
     /// Set focus on an element.
     public static func focus(_ element: AXUIElement) -> Bool {
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success
@@ -226,6 +245,31 @@ public enum AXHelpers {
         return nil
     }
 
+    public static func exactChatRows(_ table: AXUIElement, name: String) -> [AXUIElement] {
+        children(table).filter { row in
+            guard role(row) == "AXRow" else { return false }
+            let labels = findAll(row, role: "AXStaticText").filter {
+                identifier($0) == "_NS:18" && value($0) == name
+            }
+            return labels.count == 1
+        }
+    }
+
+    public static func selfChatRows(_ table: AXUIElement) -> [AXUIElement] {
+        children(table).filter { row in
+            guard role(row) == "AXRow" else { return false }
+            return findAll(row, role: "AXImage").filter {
+                (description($0) ?? "").contains("badge me")
+            }.count == 1
+        }
+    }
+
+    public static func exactRowName(_ row: AXUIElement) -> String? {
+        let labels = findAll(row, role: "AXStaticText").filter { identifier($0) == "_NS:18" }
+        guard labels.count == 1 else { return nil }
+        return value(labels[0])
+    }
+
     /// Scroll a table row into the visible area of its parent scroll area.
     /// Returns true if the row is now visible (or was already visible).
     public static func scrollRowToVisible(_ row: AXUIElement, in scrollArea: AXUIElement) -> Bool {
@@ -305,7 +349,19 @@ public enum AXHelpers {
             kAXSelectedRowsAttribute as CFString,
             [row] as CFTypeRef
         )
-        return result == .success
+        guard result == .success else { return false }
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            table,
+            kAXSelectedRowsAttribute as CFString,
+            &value
+        ) == .success,
+        let rows = value as? [AXUIElement], rows.count == 1 else { return false }
+        return CFEqual(rows[0], row)
+    }
+
+    public static func isFocused(_ element: AXUIElement) -> Bool {
+        boolAttribute(element, kAXFocusedAttribute as String) == true
     }
 
     /// Get the parent of an AXUIElement.

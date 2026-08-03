@@ -1,5 +1,14 @@
 # Changelog
 
+### Unreleased
+- Replaced name and substring sending with exact `chat_id` or self-chat destinations
+- Added caller request IDs, durable idempotent receipts, and whole-transaction process locking
+- Added fail-closed UI identity checks and exact per-chat database confirmation
+- Removed foreground send mode, application activation, window raising, pointer movement, global input, positional Send-button guessing, and automatic room closing from the send path
+- Added explicit `confirmed` and `unknown` outcomes; unknown results are never retried automatically
+- Resolve self-chat window identity from the logged-in user's database name while proving the row by its unique self badge
+- Reserve request IDs before the irreversible UI action so a process crash cannot become a duplicate retry
+
 ### v0.5.0 - Chat Harvest (Phase 4)
 - `harvest` command: bulk-capture chat display names and load message history
 - Vision framework OCR to locate "View Previous Chats" button

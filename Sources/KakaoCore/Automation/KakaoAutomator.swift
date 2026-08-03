@@ -2,157 +2,201 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// Automates KakaoTalk UI for sending messages.
+/// Fail-closed KakaoTalk send UI. This path never launches or activates the
+/// app, raises a window, moves the cursor, or posts global input.
 public final class KakaoAutomator {
     public static let bundleId = "com.kakao.KakaoTalkMac"
 
     public init() {}
 
-    /// Send a message to a chat by navigating the UI.
-    public func sendMessage(to chatName: String, message: String, selfChat: Bool = false) throws {
-        // 1. Ensure KakaoTalk is running and logged in
-        let stateBefore = AppLifecycle.detectState()
-        try AppLifecycle.ensureReady(credentials: CredentialStore())
-        if stateBefore != .loggedIn {
-            Thread.sleep(forTimeInterval: 2.0)
+    /// Submit a message to a database-resolved chat. Database confirmation and
+    /// durable request idempotency are handled by the caller.
+    public func submit(chat: Chat, message: String) throws {
+        guard !message.isEmpty else {
+            throw AutomationError.preconditionFailed("Message cannot be empty")
+        }
+        guard let runningApp = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Self.bundleId
+        ).first else {
+            throw AutomationError.preconditionFailed("KakaoTalk is not running; foreground it manually")
         }
 
-        // 2. Activate KakaoTalk and get windows
-        try AXHelpers.activateApp(bundleId: Self.bundleId)
-        let app = try AXHelpers.appElement(bundleId: Self.bundleId)
-
-        let windows = AXHelpers.windows(app)
-        guard let mainWindow = windows.first(where: { AXHelpers.identifier($0) == "Main Window" }) else {
-            throw AutomationError.noWindows
+        let processID = runningApp.processIdentifier
+        let app = AXUIElementCreateApplication(processID)
+        var windows = AXHelpers.windows(app)
+        guard let mainWindow = windows.first(where: {
+            AXHelpers.identifier($0) == "Main Window"
+        }) else {
+            throw AutomationError.preconditionFailed("KakaoTalk's main window is not rendered; foreground it manually")
         }
-
-        // 3. Close any existing chat windows to avoid sending to the wrong one
-        for w in windows where AXHelpers.identifier(w) != "Main Window" {
-            _ = AXHelpers.closeWindow(w)
-        }
-        if windows.count > 1 {
-            Thread.sleep(forTimeInterval: 0.3)
-        }
-
-        // 4. Ensure we're on the Chats tab
-        if let chatroomsTab = AXHelpers.findFirst(mainWindow, role: "AXCheckBox", identifier: "chatrooms") {
-            _ = AXHelpers.performAction(chatroomsTab, kAXPressAction as String)
-            Thread.sleep(forTimeInterval: 0.3)
-        }
-
-        // 5. Find the chat row in the list
         guard let table = AXHelpers.chatListTable(mainWindow) else {
-            throw AutomationError.chatNotFound(chatName)
+            throw AutomationError.preconditionFailed("The rendered main window is not showing the chat list")
         }
 
-        let row: AXUIElement
-        if selfChat {
-            guard let selfRow = AXHelpers.findSelfChatRow(table) else {
-                throw AutomationError.chatNotFound("self-chat (나와의 채팅)")
+        let rows = chat.isSelfChat
+            ? AXHelpers.selfChatRows(table)
+            : AXHelpers.exactChatRows(table, name: chat.displayName)
+        // Kakao labels the self row as "My Chat"/"나와의 채팅", while the
+        // opened window uses the database-resolved current-user display name.
+        let expectedTitle = chat.displayName
+
+        let roomWindows = windows.filter { !CFEqual($0, mainWindow) }
+        let evidence = roomWindows.map { window in
+            let composers = composerCandidates(in: window)
+            return OpenRoomEvidence(
+                title: AXHelpers.title(window) ?? "",
+                composerCount: composers.count,
+                composerText: composers.first.flatMap(AXHelpers.value) ?? ""
+            )
+        }
+        let preparation = try BackgroundSendSelector.preparation(
+            expectedTitle: expectedTitle,
+            openRooms: evidence,
+            matchingRowCount: rows.count
+        )
+
+        let room: AXUIElement
+        switch preparation {
+        case .reuse:
+            room = roomWindows[0]
+        case .openExactRow:
+            guard let row = rows.first, AXHelpers.selectRow(row, in: table) else {
+                throw AutomationError.preconditionFailed("The exact destination row could not be verified as selected")
             }
-            row = selfRow
+            guard AXHelpers.focus(table), AXHelpers.isFocused(table) else {
+                throw AutomationError.preconditionFailed("The chat list did not retain focus")
+            }
+            guard postReturn(to: processID) else {
+                throw AutomationError.preconditionFailed("Could not create the KakaoTalk-targeted Return event")
+            }
+            room = try waitForExactRoom(
+                app: app,
+                mainWindow: mainWindow,
+                expectedTitle: expectedTitle
+            )
+            windows = AXHelpers.windows(app)
+            guard windows.filter({ !CFEqual($0, mainWindow) && !CFEqual($0, room) }).isEmpty else {
+                throw AutomationError.preconditionFailed("An unrelated room appeared while opening the destination")
+            }
+        }
+
+        guard AXHelpers.title(room) == expectedTitle else {
+            throw AutomationError.preconditionFailed("The target room title changed")
+        }
+        let composers = composerCandidates(in: room)
+        guard composers.count == 1 else {
+            throw AutomationError.preconditionFailed("The target does not expose one exact composer")
+        }
+        let composer = composers[0]
+        guard AXHelpers.value(composer)?.isEmpty == true else {
+            throw AutomationError.preconditionFailed("The target contains an unsent draft")
+        }
+
+        var actionAttempted = false
+        defer {
+            if !actionAttempted, AXHelpers.value(composer) == message {
+                _ = AXHelpers.setValue(composer, "")
+            }
+        }
+        guard AXHelpers.setValue(composer, message), AXHelpers.value(composer) == message else {
+            throw AutomationError.preconditionFailed("The composer did not accept the exact message")
+        }
+        guard AXHelpers.focus(composer), AXHelpers.isFocused(composer),
+              AXHelpers.value(composer) == message else {
+            throw AutomationError.preconditionFailed("The exact composer did not retain focus and content")
+        }
+        guard AXHelpers.title(room) == expectedTitle,
+              AXHelpers.windows(app).filter({ !CFEqual($0, mainWindow) }).count == 1 else {
+            throw AutomationError.preconditionFailed("Room identity changed before submission")
+        }
+
+        let controls = exactSendControls(in: room)
+        if controls.count == 1 {
+            actionAttempted = true
+            guard AXHelpers.performAction(controls[0], kAXPressAction as String) else {
+                throw AutomationError.outcomeUnknown("The exact Send control did not acknowledge its action")
+            }
+        } else if controls.isEmpty {
+            guard AXHelpers.isFocused(composer), AXHelpers.value(composer) == message else {
+                throw AutomationError.preconditionFailed("Composer identity changed before Return")
+            }
+            guard postReturn(to: processID) else {
+                throw AutomationError.preconditionFailed("Could not create the KakaoTalk-targeted Return event")
+            }
+            actionAttempted = true
         } else {
-            guard let chatRow = AXHelpers.findChatRow(table, chatName: chatName) else {
-                throw AutomationError.chatNotFound(chatName)
-            }
-            row = chatRow
+            throw AutomationError.preconditionFailed("Multiple exact Send controls are exposed")
         }
-
-        // 6. Open the chat via AX row selection + Enter (works even when off-screen).
-        //    Falls back to scroll-into-view + double-click if selection fails.
-        var opened = false
-        if AXHelpers.selectRow(row, in: table) {
-            Thread.sleep(forTimeInterval: 0.2)
-            AXHelpers.pressKey(keyCode: 36) // Enter to open
-            Thread.sleep(forTimeInterval: 0.5)
-            let checkWindows = AXHelpers.windows(app)
-            opened = checkWindows.contains { AXHelpers.identifier($0) != "Main Window" }
-        }
-        if !opened {
-            if let scrollArea = AXHelpers.chatListScrollArea(mainWindow) {
-                _ = AXHelpers.scrollRowToVisible(row, in: scrollArea)
-                Thread.sleep(forTimeInterval: 0.3)
-            }
-            AXHelpers.doubleClickElement(row)
-        }
-
-        // 7. Wait for the chat window to appear
-        var chatWindow: AXUIElement?
-        let windowDeadline = Date().addingTimeInterval(5.0)
-        while Date() < windowDeadline {
-            Thread.sleep(forTimeInterval: 0.5)
-            let updatedWindows = AXHelpers.windows(app)
-            chatWindow = updatedWindows.first(where: { AXHelpers.identifier($0) != "Main Window" })
-            if chatWindow != nil { break }
-        }
-        guard let chatWindow else {
-            throw AutomationError.inputFieldNotFound
-        }
-
-        // 8. Find the message input field
-        guard let inputField = findInputField(in: chatWindow) else {
-            throw AutomationError.inputFieldNotFound
-        }
-
-        // 9. Focus and type the message
-        _ = AXHelpers.performAction(chatWindow, kAXRaiseAction as String)
-        Thread.sleep(forTimeInterval: 0.3)
-        AXHelpers.clickElement(inputField)
-        Thread.sleep(forTimeInterval: 0.3)
-
-        if AXHelpers.setValue(inputField, message) {
-            Thread.sleep(forTimeInterval: 0.2)
-            AXHelpers.pressKey(keyCode: 36) // Return key
-        } else {
-            _ = AXHelpers.focus(inputField)
-            Thread.sleep(forTimeInterval: 0.1)
-            AXHelpers.typeText(message)
-            Thread.sleep(forTimeInterval: 0.2)
-            AXHelpers.pressKey(keyCode: 36) // Return key
-        }
-
-        // 10. Close the chat window
-        Thread.sleep(forTimeInterval: 0.3)
-        _ = AXHelpers.closeWindow(chatWindow)
     }
 
-    /// Find the message input AXTextArea in a chat window.
-    /// The input is in a top-level AXScrollArea that does NOT contain an AXTable (messages).
-    private func findInputField(in window: AXUIElement) -> AXUIElement? {
-        for child in AXHelpers.children(window) {
-            guard AXHelpers.role(child) == "AXScrollArea" else { continue }
-            // The message list scroll area contains an AXTable; the input one doesn't
-            let hasTable = AXHelpers.children(child).contains { AXHelpers.role($0) == "AXTable" }
-            if !hasTable {
-                // This scroll area should contain the input AXTextArea
-                for subchild in AXHelpers.children(child) {
-                    if AXHelpers.role(subchild) == "AXTextArea" {
-                        return subchild
-                    }
+    private func waitForExactRoom(
+        app: AXUIElement,
+        mainWindow: AXUIElement,
+        expectedTitle: String
+    ) throws -> AXUIElement {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            let rooms = AXHelpers.windows(app).filter { !CFEqual($0, mainWindow) }
+            if rooms.count == 1 {
+                guard AXHelpers.title(rooms[0]) == expectedTitle else {
+                    throw AutomationError.preconditionFailed("The newly opened room has the wrong title")
                 }
+                return rooms[0]
+            }
+            if rooms.count > 1 {
+                throw AutomationError.preconditionFailed("Multiple rooms opened for one destination")
             }
         }
-        return nil
+        throw AutomationError.preconditionFailed("The verified destination did not open")
     }
 
+    private func composerCandidates(in room: AXUIElement) -> [AXUIElement] {
+        AXHelpers.findAll(room, role: "AXTextArea").filter { element in
+            guard AXHelpers.isAttributeSettable(element, kAXValueAttribute as String) else { return false }
+            if AXHelpers.identifier(element) == "_NS:51" { return true }
+            let label = (AXHelpers.description(element) ?? "").lowercased()
+            return label == "enter a message" || label == "메시지 입력"
+        }
+    }
+
+    private func exactSendControls(in room: AXUIElement) -> [AXUIElement] {
+        let buttons = AXHelpers.findAll(room, role: "AXButton")
+        let candidates = buttons.enumerated().map { index, element in
+            let labels = [AXHelpers.title(element), AXHelpers.description(element)]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            return BackgroundSendControlCandidate(
+                index: index,
+                label: labels.count == 1 ? labels[0] : "",
+                enabled: AXHelpers.boolAttribute(element, kAXEnabledAttribute as String) == true,
+                supportsPress: AXHelpers.actionNames(element).contains(kAXPressAction as String)
+            )
+        }
+        return BackgroundSendSelector.exactSendControlIndices(from: candidates).map { buttons[$0] }
+    }
+
+    private func postReturn(to processID: pid_t) -> Bool {
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else { return false }
+        down.postToPid(processID)
+        up.postToPid(processID)
+        return true
+    }
 }
 
 public enum AutomationError: Error, CustomStringConvertible {
+    // Retained for non-send legacy commands such as harvest.
     case noWindows
     case chatNotFound(String)
-    case inputFieldNotFound
-    case sendFailed(String)
+    case preconditionFailed(String)
+    case outcomeUnknown(String)
 
     public var description: String {
         switch self {
-        case .noWindows:
-            return "KakaoTalk has no open windows"
-        case .chatNotFound(let name):
-            return "Chat '\(name)' not found in the chat list"
-        case .inputFieldNotFound:
-            return "Could not find the message input field"
-        case .sendFailed(let msg):
-            return "Failed to send message: \(msg)"
+        case .noWindows: return "No KakaoTalk windows found"
+        case .chatNotFound(let name): return "Chat not found: \(name)"
+        case .preconditionFailed(let message): return "Send precondition failed: \(message)"
+        case .outcomeUnknown(let message): return "Send outcome unknown: \(message)"
         }
     }
 }

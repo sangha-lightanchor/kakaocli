@@ -5,30 +5,72 @@ import KakaoCore
 struct SendCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "send",
-        abstract: "Send a message via UI automation"
+        abstract: "Safely send stdin to an exact chat ID or self-chat"
     )
 
-    @Argument(help: "Chat name to send to (substring match), or any value with --self")
-    var chat: String
+    @Option(name: .long, help: "Exact database chat ID")
+    var chatId: Int64?
 
-    @Argument(help: "Message text to send")
-    var message: String
-
-    @Flag(name: [.customLong("me")], help: "Send to self-chat (나와의 채팅) regardless of chat argument")
+    @Flag(name: [.customLong("self")], help: "Send to self-chat")
     var selfChat = false
 
-    @Flag(name: .long, help: "Show what would happen without actually sending")
+    @Flag(name: .long, help: "Read the message from stdin (the default and only input mode)")
+    var stdin = false
+
+    @Option(name: .long, help: "Caller-supplied UUID for durable idempotency")
+    var requestId: String
+
+    @Flag(name: .long, help: "Output a JSON receipt")
+    var json = false
+
+    @Flag(name: .long, help: "Validate without invoking KakaoTalk")
     var dryRun = false
 
+    @Option(name: .long, help: "Path to database file")
+    var db: String?
+
+    @Option(name: .long, help: "Database encryption key")
+    var key: String?
+
     func run() throws {
-        let automator = KakaoAutomator()
-        let target = selfChat ? "self-chat" : chat
+        guard (chatId != nil) != selfChat else {
+            throw ValidationError("Specify exactly one of --chat-id or --self")
+        }
+        guard let requestUUID = UUID(uuidString: requestId) else {
+            throw ValidationError("--request-id must be a UUID")
+        }
+        if let chatId, chatId <= 0 { throw ValidationError("--chat-id must be positive") }
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        guard let body = String(data: data, encoding: .utf8), !body.isEmpty else {
+            throw ValidationError("stdin must contain valid, nonempty UTF-8")
+        }
+        let destination: SendDestination = selfChat
+            ? .selfChat
+            : .chatID(ChatID(rawValue: chatId!))
         if dryRun {
-            print("DRY RUN: Would send to '\(target)': \(message)")
-            print("Steps: activate KakaoTalk → find chat '\(target)' → type message → press Enter")
+            struct DryRun: Encodable {
+                let requestID: UUID
+                let destination: String
+                let bytes: Int
+            }
+            let value = DryRun(
+                requestID: requestUUID,
+                destination: selfChat ? "self" : "chat:\(chatId!)",
+                bytes: data.count
+            )
+            if json { try JSONOutput.print(value) }
+            else { print("DRY RUN request_id=\(requestUUID) destination=\(value.destination) bytes=\(data.count)") }
             return
         }
-        try automator.sendMessage(to: chat, message: message, selfChat: selfChat)
-        print("Message sent to '\(target)'.")
+
+        let reader = try openDatabase(dbPath: db, key: key)
+        defer { reader.close() }
+        let receipt = try SafeSendClient(database: reader).send(
+            SendRequest(requestID: requestUUID, destination: destination, body: body)
+        )
+        if json { try JSONOutput.print(receipt) }
+        else {
+            print("\(receipt.status.rawValue) request_id=\(receipt.requestID) chat_id=\(receipt.chatID) log_id=\(receipt.logID.map(String.init) ?? "null")")
+        }
     }
 }

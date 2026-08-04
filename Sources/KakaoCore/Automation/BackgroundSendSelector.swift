@@ -35,8 +35,29 @@ struct FinalRoomEvidence: Equatable {
     let roomTitle: String?
     let composerCount: Int
     let composerIdentityMatches: Bool
-    let composerFocused: Bool
     let composerBody: String?
+    let foregroundApplicationUnchanged: Bool
+}
+
+struct CompositionElementEvidence: Hashable {
+    let role: String
+    let identifier: String
+}
+
+struct CompositionWindowEvidence {
+    let directChildCount: Int
+    let identifiedDirectChildren: [CompositionElementEvidence]
+    let identifierlessButtonCount: Int
+    let anonymousLeafRoles: [String]
+    let anonymousNonLeafCount: Int
+    let fixedLeavesAreEmpty: Bool
+    let sliderHasOneAnonymousLeafValueIndicator: Bool
+    let emptyIdentifierlessButtonCount: Int
+    let nestedIdentifierlessButtonCount: Int
+    let nestedButtonHasTwoEmptyGroups: Bool
+    let composerScrollCount: Int
+    let composerIsOnlyScrollChild: Bool
+    let composerIsLeaf: Bool
 }
 
 enum BackgroundSendSelector {
@@ -101,6 +122,38 @@ enum BackgroundSendSelector {
             && evidence.previewContainerCount == 1
     }
 
+    static func isCleanCompositionWindow(_ evidence: CompositionWindowEvidence) -> Bool {
+        let expected = [
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
+            CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:54"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
+            CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
+        ]
+        guard evidence.directChildCount == 18,
+              evidence.identifiedDirectChildren.count == expected.count else { return false }
+        for item in expected where evidence.identifiedDirectChildren.filter({ $0 == item }).count != 1 {
+            return false
+        }
+        return evidence.identifierlessButtonCount == 8
+            && evidence.anonymousLeafRoles.sorted() == [
+                kAXImageRole as String,
+                kAXStaticTextRole as String,
+            ].sorted()
+            && evidence.anonymousNonLeafCount == 0
+            && evidence.fixedLeavesAreEmpty
+            && evidence.sliderHasOneAnonymousLeafValueIndicator
+            && evidence.emptyIdentifierlessButtonCount == 7
+            && evidence.nestedIdentifierlessButtonCount == 1
+            && evidence.nestedButtonHasTwoEmptyGroups
+            && evidence.composerScrollCount == 1
+            && evidence.composerIsOnlyScrollChild
+            && evidence.composerIsLeaf
+    }
+
     static func preparation(
         expectedTitle: String,
         openRooms: [OpenRoomEvidence],
@@ -139,8 +192,8 @@ enum BackgroundSendSelector {
               evidence.roomTitle == expectedTitle,
               evidence.composerCount == 1,
               evidence.composerIdentityMatches,
-              evidence.composerFocused,
-              evidence.composerBody == expectedBody else {
+              evidence.composerBody == expectedBody,
+              evidence.foregroundApplicationUnchanged else {
             throw AutomationError.preconditionFailed(
                 "Room or composer identity changed before the send action"
             )
@@ -148,18 +201,59 @@ enum BackgroundSendSelector {
     }
 
     static func exactSendControlIndices(from candidates: [BackgroundSendControlCandidate]) -> [Int] {
+        candidates.filter { $0.enabled && isSendControlCandidate($0) }.map(\.index)
+    }
+
+    static func sendControlCandidateIndices(from candidates: [BackgroundSendControlCandidate]) -> [Int] {
+        candidates.filter(isSendControlCandidate).map(\.index)
+    }
+
+    private static func isSendControlCandidate(
+        _ candidate: BackgroundSendControlCandidate
+    ) -> Bool {
         let accepted = Set(["send", "전송"])
-        return candidates.filter { candidate in
-            candidate.enabled && candidate.supportsPress && accepted.contains(
+        return candidate.directChild
+            && candidate.role == kAXButtonRole as String
+            && candidate.identifier == nil
+            && candidate.hidden != true
+            && candidate.frameContained
+            && candidate.supportsPress
+            && accepted.contains(
                 candidate.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             )
-        }.map(\.index)
     }
 }
 
 struct BackgroundSendControlCandidate {
     let index: Int
     let label: String
+    let role: String?
+    let identifier: String?
+    let hidden: Bool?
+    let frameContained: Bool
+    let directChild: Bool
     let enabled: Bool
     let supportsPress: Bool
+
+    init(
+        index: Int,
+        label: String,
+        role: String? = kAXButtonRole as String,
+        identifier: String? = nil,
+        hidden: Bool? = nil,
+        frameContained: Bool = true,
+        directChild: Bool = true,
+        enabled: Bool,
+        supportsPress: Bool
+    ) {
+        self.index = index
+        self.label = label
+        self.role = role
+        self.identifier = identifier
+        self.hidden = hidden
+        self.frameContained = frameContained
+        self.directChild = directChild
+        self.enabled = enabled
+        self.supportsPress = supportsPress
+    }
 }

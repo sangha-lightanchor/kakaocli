@@ -77,6 +77,10 @@ public enum AXHelpers {
         attribute(element, kAXRoleAttribute as String)
     }
 
+    public static func subrole(_ element: AXUIElement) -> String? {
+        attribute(element, kAXSubroleAttribute as String)
+    }
+
     /// Get the title/description of an element.
     public static func title(_ element: AXUIElement) -> String? {
         attribute(element, kAXTitleAttribute as String)
@@ -100,6 +104,105 @@ public enum AXHelpers {
     /// Get the identifier of an element.
     public static func identifier(_ element: AXUIElement) -> String? {
         attribute(element, kAXIdentifierAttribute as String)
+    }
+
+    static func isVerifiedRoomWindow(_ room: AXUIElement) -> Bool {
+        role(room) == kAXWindowRole as String
+            && subrole(room) == kAXStandardWindowSubrole as String
+            && identifier(room) == "_NS:441"
+            && boolAttribute(room, kAXMinimizedAttribute as String) == false
+    }
+
+    static func composerCandidates(in room: AXUIElement) -> [AXUIElement] {
+        guard isVerifiedRoomWindow(room) else { return [] }
+        return findAll(room, role: kAXTextAreaRole as String).filter { element in
+            identifier(element) == "_NS:51"
+                && isAttributeSettable(element, kAXValueAttribute as String)
+        }
+    }
+
+    static func isCleanCompositionRoom(_ room: AXUIElement, composer: AXUIElement) -> Bool {
+        guard isVerifiedRoomWindow(room) else { return false }
+        let directChildren = children(room)
+        let identified = directChildren.compactMap { child -> CompositionElementEvidence? in
+            guard let childRole = role(child), let childIdentifier = identifier(child) else {
+                return nil
+            }
+            return CompositionElementEvidence(role: childRole, identifier: childIdentifier)
+        }
+        let identifierlessButtons = directChildren.filter {
+            role($0) == kAXButtonRole as String && identifier($0) == nil
+        }
+        let anonymousNonButtons = directChildren.filter {
+            role($0) != kAXButtonRole as String && identifier($0) == nil
+        }
+        let anonymousLeaves = anonymousNonButtons.filter { children($0).isEmpty }
+        let fixedLeaves = directChildren.filter { child in
+            guard let childIdentifier = identifier(child) else { return false }
+            return ["_NS:164", "_NS:144", "_NS:10", "_NS:54", "_NS:78"]
+                .contains(childIdentifier)
+        }
+        let sliders = directChildren.filter { identifier($0) == "_NS:182" }
+        let sliderChildren = sliders.first.map(children) ?? []
+        let sliderChild = sliderChildren.count == 1 ? sliderChildren[0] : nil
+        let sliderIsClean = sliders.count == 1
+            && sliderChild.map { role($0) == kAXValueIndicatorRole as String } == true
+            && sliderChild.map { identifier($0) == nil } == true
+            && sliderChild.map { children($0).isEmpty } == true
+        let emptyButtons = identifierlessButtons.filter { children($0).isEmpty }
+        let nestedButtons = identifierlessButtons.filter { !children($0).isEmpty }
+        let firstChildren = nestedButtons.first.map(children) ?? []
+        let firstGroup = firstChildren.count == 1 ? firstChildren[0] : nil
+        let secondChildren = firstGroup.map(children) ?? []
+        let secondGroup = secondChildren.count == 1 ? secondChildren[0] : nil
+        let nestedButtonIsClean = nestedButtons.count == 1
+            && firstGroup.map { role($0) == kAXGroupRole as String } == true
+            && firstGroup.map { identifier($0) == nil } == true
+            && secondGroup.map { role($0) == kAXGroupRole as String } == true
+            && secondGroup.map { identifier($0) == nil } == true
+            && secondGroup.map { children($0).isEmpty } == true
+        let composerScrolls = directChildren.filter {
+            role($0) == kAXScrollAreaRole as String && identifier($0) == "_NS:47"
+        }
+        let composerChildren = composerScrolls.first.map(children) ?? []
+        let composerChild = composerChildren.count == 1 ? composerChildren[0] : nil
+        return BackgroundSendSelector.isCleanCompositionWindow(
+            CompositionWindowEvidence(
+                directChildCount: directChildren.count,
+                identifiedDirectChildren: identified,
+                identifierlessButtonCount: identifierlessButtons.count,
+                anonymousLeafRoles: anonymousLeaves.compactMap(role),
+                anonymousNonLeafCount: anonymousNonButtons.count - anonymousLeaves.count,
+                fixedLeavesAreEmpty: fixedLeaves.count == 5
+                    && fixedLeaves.allSatisfy { children($0).isEmpty },
+                sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
+                emptyIdentifierlessButtonCount: emptyButtons.count,
+                nestedIdentifierlessButtonCount: nestedButtons.count,
+                nestedButtonHasTwoEmptyGroups: nestedButtonIsClean,
+                composerScrollCount: composerScrolls.count,
+                composerIsOnlyScrollChild: composerChild.map { CFEqual($0, composer) } == true,
+                composerIsLeaf: children(composer).isEmpty
+            )
+        )
+    }
+
+    static func sameElementSet(_ lhs: [AXUIElement], _ rhs: [AXUIElement]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return lhs.allSatisfy { candidate in
+            rhs.filter { CFEqual(candidate, $0) }.count == 1
+        } && rhs.allSatisfy { candidate in
+            lhs.filter { CFEqual(candidate, $0) }.count == 1
+        }
+    }
+
+    static func hasContainedFrame(_ element: AXUIElement, in container: AXUIElement) -> Bool {
+        guard let elementPosition = position(element), let elementSize = size(element),
+              let containerPosition = position(container), let containerSize = size(container),
+              elementSize.width > 0, elementSize.height > 0,
+              containerSize.width > 0, containerSize.height > 0 else { return false }
+        let elementFrame = CGRect(origin: elementPosition, size: elementSize)
+        let containerFrame = CGRect(origin: containerPosition, size: containerSize)
+        return containerFrame.contains(elementFrame)
     }
 
     /// Set the value of an element.
@@ -317,7 +420,9 @@ public enum AXHelpers {
             metadataLabelCount: chrome.filter {
                 role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:69"
             }.count,
-            previewContainerCount: chrome.filter { identifier($0) == "_NS:87" }.count
+            previewContainerCount: chrome.filter {
+                role($0) == kAXScrollAreaRole as String && identifier($0) == "_NS:87"
+            }.count
         )
     }
 

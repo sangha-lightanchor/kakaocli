@@ -143,7 +143,39 @@ struct SafeSendClientTests {
         #expect(reconciled.status == .confirmed)
         #expect(reconciled.logID == 104)
         #expect(ui.calls == 1)
-        #expect(database.resolveCalls == 1)
+        #expect(database.resolveCalls == 2)
+    }
+
+    @Test("destination identity is re-resolved at the final UI boundary")
+    func finalIdentityRecheck() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = MockSendDatabase(chat: target)
+        let ui = MockSubmitter()
+        ui.beforeIdentityCheck = {
+            database.resolvedChat = Chat(
+                id: 42,
+                type: .direct,
+                displayName: "Changed Target",
+                memberCount: 2,
+                lastMessageId: 8,
+                lastMessageAt: nil,
+                unreadCount: 0,
+                isSelfChat: false
+            )
+        }
+        let client = makeClient(database: database, ui: ui, root: root)
+
+        let receipt = try client.send(
+            SendRequest(
+                requestID: UUID(),
+                destination: .chatID(ChatID(rawValue: target.id)),
+                body: "identity locked"
+            )
+        )
+        #expect(receipt.status == .unknown)
+        #expect(ui.calls == 1)
+        #expect(database.resolveCalls == 2)
     }
 
     @Test("precondition failure clears reservation for a same-ID retry")
@@ -370,7 +402,7 @@ struct SafeSendClientTests {
 }
 
 private final class MockSendDatabase: SafeSendDatabase, @unchecked Sendable {
-    let resolvedChat: Chat?
+    var resolvedChat: Chat?
     var selfResolvedChat: Chat?
     var identityCount = 1
     var highWatermark: Int64 = 8
@@ -413,10 +445,17 @@ private final class MockSendDatabase: SafeSendDatabase, @unchecked Sendable {
 private final class MockSubmitter: KakaoSubmitting, @unchecked Sendable {
     var calls = 0
     var error: Error?
+    var beforeIdentityCheck: (() -> Void)?
 
-    func submit(chat _: Chat, message _: String) throws {
+    func submit(
+        chat _: Chat,
+        message _: String,
+        finalIdentityCheck: () throws -> Void
+    ) throws {
         calls += 1
         if let error { throw error }
+        beforeIdentityCheck?()
+        try finalIdentityCheck()
     }
 }
 
@@ -426,12 +465,17 @@ private final class ConcurrentSubmitter: KakaoSubmitting, @unchecked Sendable {
     private(set) var calls = 0
     private(set) var maximumConcurrentCalls = 0
 
-    func submit(chat _: Chat, message _: String) throws {
+    func submit(
+        chat _: Chat,
+        message _: String,
+        finalIdentityCheck: () throws -> Void
+    ) throws {
         lock.lock()
         calls += 1
         active += 1
         maximumConcurrentCalls = max(maximumConcurrentCalls, active)
         lock.unlock()
+        try finalIdentityCheck()
         Thread.sleep(forTimeInterval: 0.05)
         lock.lock()
         active -= 1

@@ -87,13 +87,12 @@ public final class SafeSendClient: @unchecked Sendable {
 
     public convenience init(
         database: DatabaseReader,
-        automator: KakaoAutomator = KakaoAutomator(),
         stateDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".kakaocli", isDirectory: true)
     ) {
         self.init(
             database: database,
-            automator: automator,
+            automator: KakaoAutomator(),
             stateDirectory: stateDirectory,
             confirmationAttempts: 120,
             confirmationDelay: 0.1
@@ -210,7 +209,23 @@ public final class SafeSendClient: @unchecked Sendable {
             receipt: provisional
         )
         do {
-            try automator.submit(chat: chat, message: request.body)
+            try automator.submit(
+                chat: chat,
+                message: request.body,
+                finalIdentityCheck: { [database] in
+                    guard let current = try database.chat(id: chat.id),
+                          current.id == chat.id,
+                          current.type == chat.type,
+                          current.displayName == chat.displayName,
+                          current.memberCount == chat.memberCount,
+                          current.isSelfChat == chat.isSelfChat,
+                          try database.chatUIIdentityCount(displayName: chat.displayName) == 1 else {
+                        throw SafeSendError.invalidRequest(
+                            "The destination database identity changed before Send"
+                        )
+                    }
+                }
+            )
         } catch AutomationError.preconditionFailed(let message) {
             // The automator proves this case occurs before submission and that
             // any text composed by this call was safely cleared.

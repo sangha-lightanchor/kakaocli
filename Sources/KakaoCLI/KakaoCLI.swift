@@ -5,7 +5,7 @@ struct KakaoCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "kakaocli",
         abstract: "Safe local KakaoTalk library and CLI",
-        version: "1.0.4",
+        version: "1.0.5",
         subcommands: [
             AuthCommand.self,
             ChatsCommand.self,

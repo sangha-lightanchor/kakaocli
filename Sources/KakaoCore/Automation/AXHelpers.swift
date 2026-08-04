@@ -48,6 +48,7 @@ enum AXHelpers {
     }
 
     static func role(_ element: AXUIElement) -> String? { string(element, kAXRoleAttribute as String) }
+    static func subrole(_ element: AXUIElement) -> String? { string(element, kAXSubroleAttribute as String) }
     static func title(_ element: AXUIElement) -> String? { string(element, kAXTitleAttribute as String) }
     static func value(_ element: AXUIElement) -> String? { string(element, kAXValueAttribute as String) }
     static func identifier(_ element: AXUIElement) -> String? { string(element, kAXIdentifierAttribute as String) }
@@ -57,18 +58,14 @@ enum AXHelpers {
         AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef) == .success
     }
 
-    static func focus(_ element: AXUIElement) -> Bool {
-        AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success
-    }
-
-    static func isFocused(_ element: AXUIElement) -> Bool {
-        bool(element, kAXFocusedAttribute as String) == true
-    }
-
     static func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
         var settable = DarwinBoolean(false)
         return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success
             && settable.boolValue
+    }
+
+    static func contains(_ root: AXUIElement, _ target: AXUIElement) -> Bool {
+        descendants(root, matching: { CFEqual($0, target) }).count == 1
     }
 
     static func actions(_ element: AXUIElement) -> [String] {
@@ -155,23 +152,6 @@ enum AXHelpers {
             role(element) == kAXImageRole as String
                 && (description(element) ?? "").localizedCaseInsensitiveContains("badge me")
         }.count == 1
-    }
-
-    static func selectExactly(_ row: AXUIElement, in table: AXUIElement) -> Bool {
-        guard AXUIElementSetAttributeValue(
-            table,
-            kAXSelectedRowsAttribute as CFString,
-            [row] as CFTypeRef
-        ) == .success,
-        let selected = attribute(table, kAXSelectedRowsAttribute as String) as? [AXUIElement],
-        selected.count == 1 else { return false }
-        return CFEqual(selected[0], row)
-    }
-
-    static func isExactlySelected(_ row: AXUIElement, in table: AXUIElement) -> Bool {
-        guard let selected = attribute(table, kAXSelectedRowsAttribute as String) as? [AXUIElement],
-              selected.count == 1 else { return false }
-        return CFEqual(selected[0], row)
     }
 
     private static func isChatListRow(_ row: AXUIElement) -> Bool {

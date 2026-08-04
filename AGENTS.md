@@ -24,15 +24,17 @@ Homebrew system library.
 - Reject every unrelated or additional open room. Reuse one exact target-title
   room only after the database proves its display identity is globally unique,
   the exact destination row still exists once, and the room has one empty
-  composer; otherwise open only the freshly verified destination row.
+  composer. If the target room is not already open, fail before UI mutation and
+  ask the user to open it manually.
 - Resolve an ID through the database, then require exactly one matching UI row.
   Prove the current Chats view from one direct navigation set and one
   chat-specific table schema; never treat a merely present `chatrooms` control
   or a generic table as selected-view proof.
-  Verify row selection, focus, the new room title, composer identity, body, and
-  focus again before invoking a control.
-- Invoke only one exact enabled Send/전송 control. If it is absent, Return may
-  be delivered only to KakaoTalk's PID after the exact composer remains focused.
+  Reverify the same row, window, composer, body, foreground application, and
+  exact Send control before invocation.
+- Never mutate Accessibility focus or selected rows, and never create or post
+  keyboard/mouse events. Invoke only one exact enabled Send/전송 AXPress control
+  from the already-open verified target room.
 - Snapshot the intended chat's log-ID high-water mark before composing and
   confirm exact outgoing UTF-8 bytes only under that same chat ID.
 - Return `confirmed` or `unknown`. Persist both. Reusing the exact same request
@@ -42,7 +44,8 @@ Homebrew system library.
 - Live tests are self-chat only. Never send a test to another person's room.
 
 `Tests/KakaoCoreTests/SafetySourceGuardTests.swift` prevents activation,
-raising, cursor, global-event, and removed-option regressions.
+raising, focus/selection mutation, keyboard/mouse events, cursor movement, and
+removed-option regressions.
 
 ## Archive and service
 

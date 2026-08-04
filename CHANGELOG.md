@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.5 — Strict background control-only sending
+
+- Remove all Accessibility focus/row-selection mutation and all keyboard event
+  construction/posting from the send transport after a failed focus attempt
+  showed that inactive KakaoTalk could become active.
+- Require one already-open exact target room and one stable AXPress-capable
+  Send/전송 control; fail before composition when the room or control is absent.
+- Recheck the frontmost application after composition, immediately before the
+  exact Send control, and after invocation so focus changes fail closed or
+  become an `unknown` post-action outcome.
+
 ## 1.0.4 — Current KakaoTalk background verifier
 
 - Recognize KakaoTalk's current stateless direct navigation buttons only when

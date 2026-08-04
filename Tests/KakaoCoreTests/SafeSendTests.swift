@@ -197,7 +197,7 @@ struct SafeSendTests {
         }
     }
 
-    @Test("final action validation rejects focus, title, window, and composer changes")
+    @Test("final action validation rejects title, window, and composer changes")
     func finalActionChanges() throws {
         let valid = FinalRoomEvidence(
             applicationRunning: true,
@@ -206,8 +206,8 @@ struct SafeSendTests {
             roomTitle: "Exact Room",
             composerCount: 1,
             composerIdentityMatches: true,
-            composerFocused: true,
-            composerBody: "exact body"
+            composerBody: "exact body",
+            frontmostApplicationUnchanged: true
         )
         try SendUIValidator.verifyFinalRoom(
             expectedTitle: "Exact Room",
@@ -220,25 +220,31 @@ struct SafeSendTests {
                 applicationRunning: true, exactWindowSet: false,
                 mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
                 composerCount: 1, composerIdentityMatches: true,
-                composerFocused: true, composerBody: "exact body"
+                composerBody: "exact body", frontmostApplicationUnchanged: true
             ),
             FinalRoomEvidence(
                 applicationRunning: true, exactWindowSet: true,
                 mainWindowIdentifier: "Main Window", roomTitle: "Wrong Room",
                 composerCount: 1, composerIdentityMatches: true,
-                composerFocused: true, composerBody: "exact body"
+                composerBody: "exact body", frontmostApplicationUnchanged: true
             ),
             FinalRoomEvidence(
                 applicationRunning: true, exactWindowSet: true,
                 mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
-                composerCount: 1, composerIdentityMatches: true,
-                composerFocused: false, composerBody: "exact body"
+                composerCount: 2, composerIdentityMatches: true,
+                composerBody: "exact body", frontmostApplicationUnchanged: true
             ),
             FinalRoomEvidence(
                 applicationRunning: true, exactWindowSet: true,
                 mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
                 composerCount: 1, composerIdentityMatches: false,
-                composerFocused: true, composerBody: "changed"
+                composerBody: "changed", frontmostApplicationUnchanged: true
+            ),
+            FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: true,
+                mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
+                composerCount: 1, composerIdentityMatches: true,
+                composerBody: "exact body", frontmostApplicationUnchanged: false
             ),
         ]
         for evidence in changed {

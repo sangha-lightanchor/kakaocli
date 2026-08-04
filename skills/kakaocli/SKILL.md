@@ -32,6 +32,12 @@ Never try to make KakaoTalk visible through automation. If kakaocli reports
 that the app or main window is unavailable, ask the user to foreground it
 manually and leave the window rendered.
 
+Before sending, the exact target room must already be open with an empty
+composer and no other chat-room window open. Ask the user to arrange that state
+manually, then let them switch back to their working app. kakaocli never
+focuses/selects a row, opens a room, or posts Return; it uses only the exact
+room's verified Send control.
+
 If local database identity has not been cached, run `kakaocli auth --refresh`
 once. Normal reads never request the Kakao SQLCipher key from Keychain. Do not
 work around Keychain prompts by broadening partition lists or access for other

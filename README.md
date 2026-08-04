@@ -75,11 +75,17 @@ The send transaction holds both the `KakaoClient` actor queue and
 - no unrelated or additional chat-room window is open; one exact target-title
   room may be reused only with a globally unique database identity, one exact
   destination row, and one empty composer;
-- row selection, focus, newly opened title, composer identity, and exact body;
-- one exact enabled Send control, or the verified focused composer before a
-  Return event delivered only to KakaoTalk's process;
+- the target room is already open—kakaocli never selects/focuses a row or opens
+  a room in the background;
+- the same row, room, composer, exact body, foreground application, and one
+  exact enabled Send control remain unchanged before AXPress;
 - the exact outgoing UTF-8 bytes appeared after the target chat's database
   high-water mark.
+
+The strict background sender never mutates Accessibility focus or selected
+rows and never creates keyboard/mouse events. If the exact target room is not
+already open, open it manually, leave its composer empty, and switch back to
+your working app before running `send`.
 
 ## Optional service
 

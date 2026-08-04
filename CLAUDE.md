@@ -9,7 +9,9 @@ Follow the complete shared safety contract in `AGENTS.md`.
 - `SafeSendCoordinator` owns request validation, idempotency, the full send
   lock, high-water snapshot, exact-byte confirmation, and receipts.
 - `SafeKakaoSender` is the only send UI transport. Its pre-action failures prove
-  no action occurred; post-control uncertainty becomes `unknown`.
+  no action occurred; post-control uncertainty becomes `unknown`. It operates
+  only on one already-open exact target room, never mutates AX focus/selection,
+  and sends only through one exact AXPress-capable Send control.
 - `StateStore` is an encrypted SQLCipher database for send attempts, allowlist,
   raw/normalized archive data, content hashes, configuration, and webhook
   outbox.

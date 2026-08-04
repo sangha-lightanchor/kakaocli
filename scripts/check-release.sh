@@ -22,6 +22,8 @@ if rg -n --fixed-strings --glob '*.swift' \
   -e 'kAXRaiseAction' \
   -e 'kAXMainAttribute' \
   -e 'kAXFocusedWindowAttribute' \
+  -e 'kAXFocusedAttribute' \
+  -e 'kAXSelectedRowsAttribute' \
   -e 'makeKeyAndOrderFront' \
   -e 'orderFront' \
   -e 'openApplication' \
@@ -30,6 +32,8 @@ if rg -n --fixed-strings --glob '*.swift' \
   -e 'CGDisplayMoveCursorToPoint' \
   -e 'CGAssociateMouseAndMouseCursorPosition' \
   -e 'CGEventTapPostEvent' \
+  -e 'CGEvent(' \
+  -e 'postToPid(' \
   -e '.post(tap:' \
   -e 'mouseEventSource:' \
   -e '--foreground' Sources; then
@@ -53,8 +57,8 @@ for state_key_guard in 'lstat(' 'fstat(' 'geteuid()' 'O_NOFOLLOW' 'O_EXCL' 'fsyn
   fi
 done
 
-if nm -u .build/release/kakaocli | rg '_CGEventPost$|_CGWarpMouseCursorPosition'; then
-  print -u2 'global event or cursor symbol found in release binary'
+if nm -u .build/release/kakaocli | rg '_CGEventPost|_CGWarpMouseCursorPosition'; then
+  print -u2 'keyboard/mouse event or cursor symbol found in release binary'
   exit 1
 fi
 

@@ -17,6 +17,8 @@ struct SafetySourceGuardTests {
             "kAXRaiseAction",
             "kAXMainAttribute",
             "kAXFocusedWindowAttribute",
+            "kAXFocusedAttribute",
+            "kAXSelectedRowsAttribute",
             "makeKeyAndOrderFront",
             "orderFront",
             "openApplication",
@@ -25,6 +27,8 @@ struct SafetySourceGuardTests {
             "CGDisplayMoveCursorToPoint",
             "CGAssociateMouseAndMouseCursorPosition",
             "CGEventTapPostEvent",
+            "CGEvent(",
+            "postToPid(",
             ".post(tap:",
             "mouseEventSource:",
             "--foreground",
@@ -39,6 +43,20 @@ struct SafetySourceGuardTests {
             for token in forbidden {
                 #expect(!contents.contains(token), "Forbidden token \(token) in \(file.lastPathComponent)")
             }
+        }
+    }
+
+    @Test("background sender is control-only")
+    func backgroundSenderIsControlOnly() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let sender = root.appendingPathComponent("Sources/KakaoCore/Automation/SafeKakaoSender.swift")
+        let contents = try String(contentsOf: sender, encoding: .utf8)
+        #expect(contents.contains("sendControlCandidates(in: room)"))
+        #expect(contents.contains("AXHelpers.perform(control, kAXPressAction"))
+        #expect(contents.contains("The exact target room is not already open"))
+        for forbidden in ["kAXFocusedAttribute", "kAXSelectedRowsAttribute", "CGEvent(", "postToPid("] {
+            #expect(!contents.contains(forbidden), "Background sender contains \(forbidden)")
         }
     }
 

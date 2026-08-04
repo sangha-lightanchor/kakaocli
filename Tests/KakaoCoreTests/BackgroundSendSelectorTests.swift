@@ -51,7 +51,8 @@ struct BackgroundSendSelectorTests {
                 identifier: "chatrooms",
                 title: nil,
                 description: nil,
-                selected: true
+                selected: true,
+                enabled: true
             )
         ))
         #expect(BackgroundSendSelector.isSelectedChatsNavigation(
@@ -60,7 +61,8 @@ struct BackgroundSendSelectorTests {
                 identifier: nil,
                 title: "Chats",
                 description: nil,
-                selected: true
+                selected: true,
+                enabled: true
             )
         ))
         for evidence in [
@@ -69,24 +71,100 @@ struct BackgroundSendSelectorTests {
                 identifier: "contacts",
                 title: "Chats",
                 description: nil,
-                selected: true
+                selected: true,
+                enabled: true
             ),
             NavigationControlEvidence(
                 role: kAXCheckBoxRole as String,
                 identifier: "chatrooms",
                 title: nil,
                 description: nil,
-                selected: false
+                selected: false,
+                enabled: true
             ),
             NavigationControlEvidence(
                 role: kAXButtonRole as String,
                 identifier: nil,
                 title: "Contacts",
                 description: nil,
-                selected: true
+                selected: true,
+                enabled: true
             ),
         ] {
             #expect(!BackgroundSendSelector.isSelectedChatsNavigation(evidence))
+        }
+    }
+
+    @Test("accepts only the complete current stateless navigation set")
+    func statelessChatsNavigation() {
+        let valid = ["friends", "chatrooms", "more"].map {
+            NavigationControlEvidence(
+                role: kAXButtonRole as String,
+                identifier: $0,
+                title: nil,
+                description: nil,
+                selected: nil,
+                enabled: true
+            )
+        }
+        #expect(BackgroundSendSelector.isVerifiedChatList(
+            navigationControls: valid,
+            tableCandidateCount: 1
+        ))
+
+        let invalidSets = [
+            Array(valid.dropLast()),
+            valid + [valid[1]],
+            valid.map {
+                NavigationControlEvidence(
+                    role: $0.identifier == "more" ? kAXCheckBoxRole as String : $0.role,
+                    identifier: $0.identifier,
+                    title: $0.title,
+                    description: $0.description,
+                    selected: $0.selected,
+                    enabled: $0.enabled
+                )
+            },
+            valid.map {
+                NavigationControlEvidence(
+                    role: $0.role,
+                    identifier: $0.identifier,
+                    title: $0.title,
+                    description: $0.description,
+                    selected: $0.identifier == "chatrooms" ? false : $0.selected,
+                    enabled: $0.enabled
+                )
+            },
+            valid.map {
+                NavigationControlEvidence(
+                    role: $0.role,
+                    identifier: $0.identifier,
+                    title: $0.title,
+                    description: $0.description,
+                    selected: $0.selected,
+                    enabled: $0.identifier == "friends" ? false : $0.enabled
+                )
+            },
+        ]
+        for evidence in invalidSets {
+            #expect(!BackgroundSendSelector.isVerifiedChatList(
+                navigationControls: evidence,
+                tableCandidateCount: 1
+            ))
+        }
+        #expect(!BackgroundSendSelector.isVerifiedChatList(
+            navigationControls: valid,
+            tableCandidateCount: 2
+        ))
+    }
+
+    @Test("accepts only known versioned row-name identifiers")
+    func rowNameIdentifiers() {
+        for identifier in ["_NS:18", "_NS:40", "Display Name"] {
+            #expect(BackgroundSendSelector.isAcceptedChatRowNameIdentifier(identifier))
+        }
+        for identifier in [nil, "_NS:69", "AXStaticText", ""] {
+            #expect(!BackgroundSendSelector.isAcceptedChatRowNameIdentifier(identifier))
         }
     }
 

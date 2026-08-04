@@ -16,7 +16,8 @@ struct NavigationControlEvidence: Equatable {
     let identifier: String?
     let title: String?
     let description: String?
-    let selected: Bool
+    let selected: Bool?
+    let enabled: Bool?
 }
 
 struct FinalRoomEvidence: Equatable {
@@ -32,7 +33,7 @@ struct FinalRoomEvidence: Equatable {
 
 enum BackgroundSendSelector {
     static func isSelectedChatsNavigation(_ evidence: NavigationControlEvidence) -> Bool {
-        guard evidence.selected else { return false }
+        guard evidence.selected == true else { return false }
         if evidence.role == kAXCheckBoxRole as String,
            evidence.identifier == "chatrooms" {
             return true
@@ -43,6 +44,44 @@ enum BackgroundSendSelector {
         let labels = [evidence.title, evidence.description]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         return labels.contains(where: acceptedLabels.contains)
+    }
+
+    /// KakaoTalk 26.x exposes its three primary navigation buttons without a
+    /// selected-state attribute. Accept that layout only when the complete,
+    /// unique, enabled identifier set is present as direct window children.
+    static func isStatelessChatsNavigationSet(
+        _ evidence: [NavigationControlEvidence]
+    ) -> Bool {
+        let identifiers = Set(["friends", "chatrooms", "more"])
+        let controls = evidence.filter { item in
+            item.identifier.map(identifiers.contains) == true
+        }
+        guard controls.count == identifiers.count,
+              Set(controls.compactMap(\.identifier)) == identifiers else {
+            return false
+        }
+        return controls.allSatisfy { item in
+            item.role == kAXButtonRole as String
+                && item.selected == nil
+                && item.enabled == true
+        }
+    }
+
+    static func isVerifiedChatList(
+        navigationControls: [NavigationControlEvidence],
+        tableCandidateCount: Int
+    ) -> Bool {
+        guard tableCandidateCount == 1 else { return false }
+        let selected = navigationControls.filter(isSelectedChatsNavigation)
+        if selected.count == 1 {
+            return true
+        }
+        guard selected.isEmpty else { return false }
+        return isStatelessChatsNavigationSet(navigationControls)
+    }
+
+    static func isAcceptedChatRowNameIdentifier(_ identifier: String?) -> Bool {
+        Set(["_NS:18", "_NS:40", "Display Name"]).contains(identifier)
     }
 
     static func preparation(

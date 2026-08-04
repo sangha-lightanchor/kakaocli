@@ -60,8 +60,16 @@ public enum AXHelpers {
     public static func windows(_ appElement: AXUIElement) -> [AXUIElement] {
         var value: AnyObject?
         let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value)
-        guard result == .success, let windows = value as? [AXUIElement] else { return [] }
-        return windows
+        if result == .success,
+           let windows = value as? [AXUIElement],
+           !windows.isEmpty {
+            return windows
+        }
+
+        // KakaoTalk 26.x can expose its windows only as direct application
+        // children while it is inactive. Keep this fallback exact: direct
+        // AXWindow children only, never arbitrary descendants.
+        return children(appElement).filter { role($0) == kAXWindowRole as String }
     }
 
     /// Get the role of an element.
@@ -206,21 +214,17 @@ public enum AXHelpers {
     }
 
     /// Find the AXRow in a chat list whose name label matches the given text.
-    /// KakaoTalk chat list: AXTable > AXRow > AXCell > AXStaticText(id="_NS:18")
+    /// KakaoTalk chat-list labels use a small known identifier set across
+    /// releases. Unknown static text is never treated as destination identity.
     public static func findChatRow(_ table: AXUIElement, chatName: String, exact: Bool = false) -> AXUIElement? {
         for row in children(table) {
             guard role(row) == "AXRow" else { continue }
-            for cell in children(row) {
-                guard role(cell) == "AXCell" else { continue }
-                for child in children(cell) {
-                    if role(child) == "AXStaticText" && identifier(child) == "_NS:18" {
-                        let name = value(child) ?? ""
-                        let matches = exact ? name == chatName : name.localizedCaseInsensitiveContains(chatName)
-                        if matches {
-                            return row
-                        }
-                    }
-                }
+            guard let name = exactRowName(row) else { continue }
+            let matches = exact
+                ? name == chatName
+                : name.localizedCaseInsensitiveContains(chatName)
+            if matches {
+                return row
             }
         }
         return nil
@@ -262,9 +266,12 @@ public enum AXHelpers {
     }
 
     public static func exactRowName(_ row: AXUIElement) -> String? {
-        let labels = findAll(row, role: "AXStaticText").filter { identifier($0) == "_NS:18" }
+        let labels = findAll(row, role: "AXStaticText").filter {
+            BackgroundSendSelector.isAcceptedChatRowNameIdentifier(identifier($0))
+        }
         guard labels.count == 1 else { return nil }
-        return value(labels[0]) ?? title(labels[0])
+        guard let name = value(labels[0]) ?? title(labels[0]), !name.isEmpty else { return nil }
+        return name
     }
 
     /// Return KakaoTalk's chat-list table only when the selected Chats
@@ -272,23 +279,6 @@ public enum AXHelpers {
     /// are both unique. This is deliberately stricter than `chatListTable`,
     /// which remains available to legacy non-send workflows.
     public static func verifiedSendChatListTable(_ window: AXUIElement) -> AXUIElement? {
-        let selectedChatsControls = findAll(window, role: "AXCheckBox")
-            + findAll(window, role: "AXButton")
-            + findAll(window, role: "AXRadioButton")
-        let selectedMatches = selectedChatsControls.filter { element in
-            BackgroundSendSelector.isSelectedChatsNavigation(
-                NavigationControlEvidence(
-                    role: role(element),
-                    identifier: identifier(element),
-                    title: title(element),
-                    description: description(element),
-                    selected: boolAttribute(element, kAXSelectedAttribute as String) == true
-                        || boolAttribute(element, kAXValueAttribute as String) == true
-                )
-            )
-        }
-        guard selectedMatches.count == 1 else { return nil }
-
         let candidates = children(window)
             .filter { role($0) == "AXScrollArea" }
             .flatMap(children)
@@ -299,7 +289,29 @@ public enum AXHelpers {
                 return rows.contains { exactRowName($0) != nil }
                     || !selfChatRows(table).isEmpty
             }
-        guard candidates.count == 1 else { return nil }
+
+        let navigationControls = children(window)
+            .filter {
+                let elementRole = role($0)
+                return elementRole == kAXCheckBoxRole as String
+                    || elementRole == kAXButtonRole as String
+                    || elementRole == kAXRadioButtonRole as String
+            }
+            .map { element in
+                NavigationControlEvidence(
+                    role: role(element),
+                    identifier: identifier(element),
+                    title: title(element),
+                    description: description(element),
+                    selected: boolAttribute(element, kAXSelectedAttribute as String)
+                        ?? boolAttribute(element, kAXValueAttribute as String),
+                    enabled: boolAttribute(element, kAXEnabledAttribute as String)
+                )
+            }
+        guard BackgroundSendSelector.isVerifiedChatList(
+            navigationControls: navigationControls,
+            tableCandidateCount: candidates.count
+        ) else { return nil }
         return candidates[0]
     }
 

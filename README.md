@@ -21,9 +21,9 @@
 
 kakaocli lets AI agents (Claude Code, Cursor, custom bots) check and send your KakaoTalk messages — something Kakao's official APIs simply can't do.
 
-- **AI Agent Integration** — JSON output for every command, MCP skill definition, webhook delivery, auto-login
+- **AI Agent Integration** — JSON output, an MCP skill definition, and validated webhook delivery
 - **Read** — list chats, view messages, full-text search, raw SQL queries
-- **Send** — send messages to any chat via UI automation
+- **Safe Send** — send only by an exact stable chat ID or to self-chat, with durable idempotency and database confirmation
 - **Sync** — real-time NDJSON message stream with webhook support
 - **Harvest** — bulk-capture chat names and load older message history
 
@@ -35,9 +35,9 @@ Kakao's official APIs cannot read chat history, export conversations, or send fr
 
 kakaocli는 AI 에이전트(Claude Code, Cursor, 커스텀 봇)가 카카오톡 메시지를 확인하고 보낼 수 있게 해줍니다 — 카카오 공식 API로는 불가능한 기능입니다.
 
-- **AI 에이전트 연동** — 모든 명령의 JSON 출력, MCP 스킬 정의, 웹훅 전달, 자동 로그인
+- **AI 에이전트 연동** — JSON 출력, MCP 스킬 정의, 검증된 웹훅 전달
 - **읽기** — 채팅 목록, 메시지 조회, 전체 텍스트 검색, SQL 쿼리
-- **전송** — UI 자동화를 통한 메시지 전송
+- **안전한 전송** — 정확한 채팅 ID 또는 나에게만 전송하며 중복 방지 및 데이터베이스 확인 수행
 - **동기화** — 실시간 NDJSON 메시지 스트림 및 웹훅 지원
 - **수집** — 채팅방 이름 일괄 수집 및 이전 메시지 로드
 
@@ -49,27 +49,39 @@ kakaocli는 AI 에이전트(Claude Code, Cursor, 커스텀 봇)가 카카오톡 
 
 ### 1. Install / 설치
 
-**Option A: Homebrew (recommended)**
+**Option A: Hardened fork source build (recommended)**
+
+```bash
+brew install sqlcipher
+git clone https://github.com/sangha-lightanchor/kakaocli.git
+cd kakaocli
+
+# Tested kakaocli 0.7.0 security baseline
+git checkout 20d63bb7456add8d94e3387bacb26bae2f7d2cf5
+
+swift test
+swift build -c release
+mkdir -p "$HOME/.local/bin"
+install -m 755 .build/release/kakaocli "$HOME/.local/bin/kakaocli"
+"$HOME/.local/bin/kakaocli" --version
+```
+
+The full commit SHA is the reproducible build recommended for Chase and other
+users who need the tested hardened sender. It reports `0.7.0`. Development
+continues on the `feat/upstream-v0.6-safe-improvements` branch; pin the commit
+above for a stable installation.
+
+If `~/.local/bin` is not already on your `PATH`, either add it or invoke the
+binary using its full path.
+
+**Option B: Upstream Homebrew build**
 
 ```bash
 brew install silver-flight-group/tap/kakaocli
 ```
 
-This installs sqlcipher automatically and builds from source (~20 seconds).
-
-**Option B: Build from source**
-
-```bash
-brew install sqlcipher
-git clone https://github.com/silver-flight-group/kakaocli.git
-cd kakaocli
-swift build -c release
-# Binary is at .build/release/kakaocli
-# Either add to PATH or run directly:
-.build/release/kakaocli status
-# Or use swift run:
-swift run kakaocli status
-```
+This installs the upstream project, not the pinned hardened fork described
+above. Its behavior and version may differ.
 
 ### 2. Grant permissions / 권한 부여
 
@@ -292,7 +304,8 @@ Each new message is delivered as a JSON object:
 
 A kakaocli [skill definition](skills/kakaocli/SKILL.md) is included for use with [OpenClaw](https://github.com/nichochar/open-claw) or similar skill registries.
 
-See [AGENTS.md](AGENTS.md) for detailed integration instructions including credential setup, lifecycle management, and error handling.
+See [AGENTS.md](AGENTS.md) for the fail-closed sender contract, database setup,
+idempotency rules, and verification requirements.
 
 ## How It Works / 동작 원리
 

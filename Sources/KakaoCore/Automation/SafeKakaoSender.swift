@@ -106,12 +106,10 @@ public final class SafeKakaoSender: KakaoSendUI, @unchecked Sendable {
         } else {
             rows = []
         }
-        let expectedTitle: String
-        if chat.isSelfChat, rows.count == 1, let rowTitle = AXHelpers.exactName(in: rows[0]), !rowTitle.isEmpty {
-            expectedTitle = rowTitle
-        } else {
-            expectedTitle = chat.displayName
-        }
+        // For self-chat, row identity is proven by Kakao's unique self badge;
+        // the room title is the database-resolved current-user display name,
+        // not the row's localized "My Chat" label.
+        let expectedTitle = chat.displayName
         let roomEvidence = roomWindows.map { window in
             let composers = composerCandidates(in: window)
             return OpenRoomEvidence(

@@ -7,6 +7,10 @@
   caller-supplied request IDs.
 - Added whole-transaction process locking, fail-closed UI proof, exact database
   confirmation, and durable `confirmed`/`unknown` receipts.
+- Resolve the self-chat window title from the logged-in user's database record
+  while continuing to prove the UI row by KakaoTalk's unique self-chat badge.
+- Reserve request IDs durably before UI submission so a process crash cannot
+  turn an uncertain first attempt into a duplicate retry.
 - Removed app lifecycle automation, name/substring sending, harvest UI actions,
   and all foreground/global input paths.
 - Added the optional user-only Unix-socket service, vnode database/WAL events,

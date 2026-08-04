@@ -135,6 +135,53 @@ struct SafeSendTests {
         #expect(database.confirmationCalls == 0)
     }
 
+    @Test("request is reserved before UI action and confirmed receipts replace the reservation")
+    func preActionReservation() throws {
+        let database = MockDatabase(chat: target)
+        database.confirmedLogID = 101
+        let state = MockState()
+        let ui = MockUI()
+        let request = SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "reserved")
+        ui.onSubmit = {
+            let attempt = try state.sendAttempt(requestID: request.requestID)
+            #expect(attempt?.receipt.status == .unknown)
+        }
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let receipt = try coordinator.send(request)
+        #expect(receipt.status == .confirmed)
+        #expect(try state.sendAttempt(requestID: request.requestID)?.receipt == receipt)
+    }
+
+    @Test("precondition failure clears the reservation for a same-ID retry")
+    func preconditionRetry() throws {
+        let database = MockDatabase(chat: target)
+        database.confirmedLogID = 102
+        let state = MockState()
+        let ui = MockUI()
+        ui.error = .preconditionFailed("not ready")
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "retry")
+        #expect(throws: KakaoClientError.self) { try coordinator.send(request) }
+        #expect(try state.sendAttempt(requestID: request.requestID) == nil)
+        ui.error = nil
+        #expect(try coordinator.send(request).status == .confirmed)
+        #expect(ui.calls == 2)
+    }
+
     @Test("request IDs cannot be reused with different content")
     func requestConflict() throws {
         let database = MockDatabase(chat: target)
@@ -190,13 +237,16 @@ private final class MockState: SendStateStoring, @unchecked Sendable {
             receipt: receipt
         )
     }
+    func removeSendAttempt(requestID: UUID) throws { attempts.removeValue(forKey: requestID) }
 }
 
 private final class MockUI: KakaoSendUI, @unchecked Sendable {
     var calls = 0
     var error: SendUIError?
+    var onSubmit: (() throws -> Void)?
     func submit(chat: Chat, body: String) throws {
         calls += 1
+        try onSubmit?()
         if let error { throw error }
     }
 }

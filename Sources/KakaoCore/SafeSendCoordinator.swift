@@ -14,7 +14,7 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         state: SendStateStoring,
         ui: KakaoSendUI,
         transactionLock: SendTransactionLocking,
-        confirmationAttempts: Int = 50,
+        confirmationAttempts: Int = 120,
         confirmationDelay: TimeInterval = 0.1
     ) {
         self.database = database
@@ -64,14 +64,31 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         }
 
         let highWatermark = try database.maxLogID(chatID: chat.id)
+        let provisional = SendReceipt(
+            requestID: request.requestID,
+            chatID: chat.id,
+            logID: nil,
+            status: .unknown
+        )
+        // Reserve the request before the irreversible UI action. If the
+        // process dies after this point, replay returns unknown instead of
+        // risking a duplicate message.
+        try state.saveSendAttempt(
+            destinationKey: request.destination.storageKey,
+            bodySHA256: bodyHash,
+            receipt: provisional
+        )
         do {
             try ui.submit(chat: chat, body: request.body)
         } catch let error as SendUIError {
             switch error {
             case .preconditionFailed(let message):
+                // SafeKakaoSender guarantees that this case occurs before a
+                // submit action and clears any text it composed.
+                try state.removeSendAttempt(requestID: request.requestID)
                 throw KakaoClientError.uiPrecondition(message)
             case .outcomeUnknown:
-                return try storeUnknown(request: request, chat: chat, bodyHash: bodyHash)
+                return provisional
             }
         } catch {
             throw error
@@ -100,21 +117,6 @@ public final class SafeSendCoordinator: @unchecked Sendable {
                 Thread.sleep(forTimeInterval: confirmationDelay)
             }
         }
-        return try storeUnknown(request: request, chat: chat, bodyHash: bodyHash)
-    }
-
-    private func storeUnknown(request: SendRequest, chat: Chat, bodyHash: String) throws -> SendReceipt {
-        let receipt = SendReceipt(
-            requestID: request.requestID,
-            chatID: chat.id,
-            logID: nil,
-            status: .unknown
-        )
-        try state.saveSendAttempt(
-            destinationKey: request.destination.storageKey,
-            bodySHA256: bodyHash,
-            receipt: receipt
-        )
-        return receipt
+        return provisional
     }
 }

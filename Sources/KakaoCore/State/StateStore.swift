@@ -10,6 +10,7 @@ public struct StoredSendAttempt: Sendable, Equatable {
 public protocol SendStateStoring: AnyObject, Sendable {
     func sendAttempt(requestID: UUID) throws -> StoredSendAttempt?
     func saveSendAttempt(destinationKey: String, bodySHA256: String, receipt: SendReceipt) throws
+    func removeSendAttempt(requestID: UUID) throws
 }
 
 public struct PendingArchiveAttachment: Sendable {
@@ -107,7 +108,14 @@ public final class StateStore: SendStateStoring, @unchecked Sendable {
             INSERT INTO send_attempts(
                 request_id, destination, body_sha256, chat_id, log_id, status, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(request_id) DO NOTHING
+            ON CONFLICT(request_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                log_id = excluded.log_id,
+                status = excluded.status
+            WHERE send_attempts.destination = excluded.destination
+              AND send_attempts.body_sha256 = excluded.body_sha256
+              AND send_attempts.status = 'unknown'
+              AND excluded.status = 'confirmed'
             """,
             [
                 .text(receipt.requestID.uuidString.lowercased()),
@@ -118,6 +126,13 @@ public final class StateStore: SendStateStoring, @unchecked Sendable {
                 .text(receipt.status.rawValue),
                 .double(Date().timeIntervalSince1970),
             ]
+        )
+    }
+
+    public func removeSendAttempt(requestID: UUID) throws {
+        try run(
+            "DELETE FROM send_attempts WHERE request_id = ?",
+            [.text(requestID.uuidString.lowercased())]
         )
     }
 

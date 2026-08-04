@@ -79,6 +79,7 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
     }
 
     public func chats(limit: Int = 50) throws -> [Chat] {
+        let selfDisplayName = try currentUserDisplayName()
         let sql = """
             SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                    r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
@@ -109,7 +110,11 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
                 .compactMap(Self.nonEmpty)
                 .first
             let isSelf = type == .selfChat
-            let name = isSelf ? "Self-chat (Notes)" : (explicitName ?? directName ?? "(unknown)")
+            // KakaoTalk labels the self row as "My Chat"/"나와의 채팅", but
+            // titles the opened room with the current user's display name.
+            // Resolve that title from the same local database so the sender can
+            // verify the newly opened window without trusting a generic label.
+            let name = isSelf ? (selfDisplayName ?? "(unknown)") : (explicitName ?? directName ?? "(unknown)")
             return Record(
                 chat: Chat(
                     id: ChatID(rawValue: row.int64(0)),
@@ -281,6 +286,18 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
             bindings: values.map(SQLValue.int64)
         ) { ($0.int64(0), $0.string(1) ?? "") }
         return Dictionary(uniqueKeysWithValues: rows.filter { !$0.1.isEmpty })
+    }
+
+    private func currentUserDisplayName() throws -> String? {
+        try query(
+            """
+            SELECT COALESCE(NULLIF(u.displayName, ''), NULLIF(u.nickName, ''), NULLIF(u.friendNickName, ''))
+            FROM NTChatContext c
+            JOIN NTUser u ON u.userId = c.userId AND u.linkId = 0
+            LIMIT 1
+            """,
+            bindings: []
+        ) { Self.nonEmpty($0.string(0)) }.first.flatMap { $0 }
     }
 
     private static func makeMessage(row: Row, ownID: Int64) -> Message {

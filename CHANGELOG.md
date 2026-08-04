@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.4 — Current KakaoTalk background verifier
+
+- Recognize KakaoTalk's current stateless direct navigation buttons only when
+  jointly proven with exactly one current chat-row schema.
+- Update exact row-name resolution to the current Accessibility identifier and
+  retain fail-closed rejection for missing, duplicate, generic, or stale UI
+  structures.
+- Discover only direct rendered window children when inactive KakaoTalk
+  temporarily exposes an empty `AXWindows` collection.
+- Safely reuse one exact target-title room only when no other room is open, the
+  database/UI destination remains unique, and its sole composer is empty.
+- Expand source guards against app activation, window ordering, cursor APIs,
+  global event posting, and application launch helpers.
+
 ## 1.0.3 — Conservative post-action failures
 
 - Convert unclassified UI transport errors and database/receipt confirmation

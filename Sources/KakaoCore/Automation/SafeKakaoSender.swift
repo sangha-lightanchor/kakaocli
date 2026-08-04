@@ -42,20 +42,44 @@ public struct NavigationControlEvidence: Sendable, Equatable {
     public let identifier: String?
     public let title: String?
     public let description: String?
-    public let selected: Bool
+    /// `nil` means KakaoTalk does not expose either AXSelected or a boolean
+    /// AXValue for this control. It is distinct from an explicit `false`.
+    public let selected: Bool?
+    public let enabled: Bool?
 
     public init(
         role: String?,
         identifier: String?,
         title: String?,
         description: String?,
-        selected: Bool
+        selected: Bool?,
+        enabled: Bool? = nil
     ) {
         self.role = role
         self.identifier = identifier
         self.title = title
         self.description = description
         self.selected = selected
+        self.enabled = enabled
+    }
+}
+
+public struct ChatRowStructureEvidence: Sendable, Equatable {
+    public let nonemptyNameLabelCount: Int
+    public let profileControlCount: Int
+    public let metadataLabelCount: Int
+    public let messagePreviewCount: Int
+
+    public init(
+        nonemptyNameLabelCount: Int,
+        profileControlCount: Int,
+        metadataLabelCount: Int,
+        messagePreviewCount: Int
+    ) {
+        self.nonemptyNameLabelCount = nonemptyNameLabelCount
+        self.profileControlCount = profileControlCount
+        self.metadataLabelCount = metadataLabelCount
+        self.messagePreviewCount = messagePreviewCount
     }
 }
 
@@ -93,7 +117,7 @@ public struct FinalRoomEvidence: Sendable, Equatable {
 /// Pure fail-closed decisions used by both the real transport and unit tests.
 public enum SendUIValidator {
     public static func isSelectedChatsNavigation(_ evidence: NavigationControlEvidence) -> Bool {
-        guard evidence.selected else { return false }
+        guard evidence.selected == true else { return false }
         if evidence.role == kAXCheckBoxRole as String,
            evidence.identifier == "chatrooms" {
             return true
@@ -106,25 +130,81 @@ public enum SendUIValidator {
         return labels.contains(where: acceptedLabels.contains)
     }
 
+    public static func isStatelessChatsNavigationSet(
+        _ evidence: [NavigationControlEvidence]
+    ) -> Bool {
+        let knownIdentifiers = Set(["friends", "chatrooms", "more"])
+        let known = evidence.filter { item in
+            item.identifier.map(knownIdentifiers.contains) == true
+        }
+        guard known.count == knownIdentifiers.count else { return false }
+        for identifier in knownIdentifiers {
+            let matches = known.filter { $0.identifier == identifier }
+            guard matches.count == 1,
+                  let control = matches.first,
+                  control.role == kAXButtonRole as String,
+                  control.selected == nil,
+                  control.enabled == true else {
+                return false
+            }
+        }
+        return true
+    }
+
+    public static func isChatRowStructure(_ evidence: ChatRowStructureEvidence) -> Bool {
+        evidence.nonemptyNameLabelCount == 1
+            && evidence.profileControlCount == 1
+            && evidence.metadataLabelCount == 1
+            && evidence.messagePreviewCount == 1
+    }
+
+    public static func isVerifiedChatList(
+        navigationControls: [NavigationControlEvidence],
+        tableCandidateCount: Int
+    ) -> Bool {
+        guard tableCandidateCount == 1 else { return false }
+        let selected = navigationControls.filter(isSelectedChatsNavigation)
+        if selected.count == 1 { return true }
+        guard selected.isEmpty else { return false }
+        return isStatelessChatsNavigationSet(navigationControls)
+    }
+
     public static func preparation(
         expectedTitle: String,
         openRooms: [OpenRoomEvidence],
         matchingRowCount: Int
     ) throws -> RoomPreparation {
-        // A room title is not a stable chat identity. Direct chats and groups
-        // may share titles, so no already-open room is safe to reuse until
-        // Kakao exposes an ID-bound Accessibility fingerprint.
-        guard openRooms.isEmpty else {
-            throw SendUIError.preconditionFailed(
-                "A chat room is already open; close it manually before sending"
-            )
-        }
-
         guard matchingRowCount == 1 else {
             let message = matchingRowCount == 0
                 ? "The exact destination row is not visible"
                 : "The destination label matches multiple UI rows"
             throw SendUIError.preconditionFailed(message)
+        }
+
+        let matchingRooms = openRooms.filter { $0.title == expectedTitle }
+        let unrelatedRooms = openRooms.filter { $0.title != expectedTitle }
+        guard unrelatedRooms.isEmpty else {
+            throw SendUIError.preconditionFailed(
+                "An unrelated chat room is already open; close it manually before sending"
+            )
+        }
+        guard matchingRooms.count <= 1 else {
+            throw SendUIError.preconditionFailed(
+                "Multiple open rooms match the destination title"
+            )
+        }
+        if let room = matchingRooms.first {
+            guard room.composerCount == 1 else {
+                throw SendUIError.preconditionFailed(
+                    "The open target room does not expose exactly one verified composer"
+                )
+            }
+            guard room.composerText.isEmpty else {
+                throw SendUIError.preconditionFailed(
+                    "The open target room contains an unsent draft"
+                )
+            }
+            return .reuse
         }
         return .openExactRow
     }
@@ -177,9 +257,17 @@ public final class SafeKakaoSender: KakaoSendUI, @unchecked Sendable {
         }
 
         let roomWindows = windows.filter { !CFEqual($0, mainWindow) }
-        guard let table = AXHelpers.chatList(in: mainWindow) else {
+        let table: AXUIElement
+        switch AXHelpers.chatListResolution(in: mainWindow) {
+        case .verified(let verifiedTable):
+            table = verifiedTable
+        case .navigationUnverified:
             throw SendUIError.preconditionFailed(
-                "KakaoTalk's selected Chats tab and chat list could not be structurally verified"
+                "KakaoTalk's Chats navigation could not be structurally verified"
+            )
+        case .tableUnverified:
+            throw SendUIError.preconditionFailed(
+                "KakaoTalk's current chat-list rows could not be structurally verified"
             )
         }
         let rows = matchingRows(in: table, chat: chat)
@@ -205,7 +293,25 @@ public final class SafeKakaoSender: KakaoSendUI, @unchecked Sendable {
         let room: AXUIElement
         switch preparation {
         case .reuse:
-            throw SendUIError.preconditionFailed("An already-open room cannot prove its chat ID")
+            let matchingRooms = roomWindows.filter { AXHelpers.title($0) == expectedTitle }
+            guard matchingRooms.count == 1, let exactRoom = matchingRooms.first,
+                  let currentTable = AXHelpers.chatList(in: mainWindow),
+                  CFEqual(currentTable, table) else {
+                throw SendUIError.preconditionFailed(
+                    "The exact open target room or chat list changed during verification"
+                )
+            }
+            let currentRows = matchingRows(in: currentTable, chat: chat)
+            guard currentRows.count == 1,
+                  let originalRow = rows.first,
+                  let currentRow = currentRows.first,
+                  CFEqual(originalRow, currentRow),
+                  AXHelpers.windows(appElement).count == 2 else {
+                throw SendUIError.preconditionFailed(
+                    "The destination identity or window set changed before room reuse"
+                )
+            }
+            room = exactRoom
         case .openExactRow:
             guard let row = rows.first else {
                 throw SendUIError.preconditionFailed("The chat list changed during destination resolution")

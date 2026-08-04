@@ -21,10 +21,14 @@ Homebrew system library.
   including database confirmation.
 - Never launch or activate KakaoTalk, raise a window, move the cursor, or post
   global keyboard/mouse input. Users may foreground KakaoTalk themselves.
-- Reject every already-open room: a window title is not a stable chat identity.
-  Open only the one freshly verified destination row and require one empty
-  composer.
+- Reject every unrelated or additional open room. Reuse one exact target-title
+  room only after the database proves its display identity is globally unique,
+  the exact destination row still exists once, and the room has one empty
+  composer; otherwise open only the freshly verified destination row.
 - Resolve an ID through the database, then require exactly one matching UI row.
+  Prove the current Chats view from one direct navigation set and one
+  chat-specific table schema; never treat a merely present `chatrooms` control
+  or a generic table as selected-view proof.
   Verify row selection, focus, the new room title, composer identity, body, and
   focus again before invoking a control.
 - Invoke only one exact enabled Send/전송 control. If it is absent, Return may

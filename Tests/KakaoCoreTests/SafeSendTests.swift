@@ -43,6 +43,90 @@ struct SafeSendTests {
         ))
     }
 
+    @Test("recognizes the current stateless navigation only with one certified chat table")
+    func currentStatelessChatsNavigation() {
+        let navigation = ["friends", "chatrooms", "more"].map { identifier in
+            NavigationControlEvidence(
+                role: "AXButton", identifier: identifier,
+                title: nil, description: nil, selected: nil,
+                enabled: true
+            )
+        }
+        #expect(SendUIValidator.isStatelessChatsNavigationSet(navigation))
+        #expect(SendUIValidator.isVerifiedChatList(
+            navigationControls: navigation,
+            tableCandidateCount: 1
+        ))
+        #expect(!SendUIValidator.isVerifiedChatList(
+            navigationControls: navigation,
+            tableCandidateCount: 0
+        ))
+        #expect(!SendUIValidator.isVerifiedChatList(
+            navigationControls: navigation,
+            tableCandidateCount: 2
+        ))
+
+        var deselected = navigation
+        deselected[1] = NavigationControlEvidence(
+            role: "AXButton", identifier: "chatrooms",
+            title: nil, description: nil, selected: false,
+            enabled: true
+        )
+        #expect(!SendUIValidator.isVerifiedChatList(
+            navigationControls: deselected,
+            tableCandidateCount: 1
+        ))
+
+        var duplicate = navigation
+        duplicate.append(navigation[1])
+        #expect(!SendUIValidator.isStatelessChatsNavigationSet(duplicate))
+
+        var disabled = navigation
+        disabled[1] = NavigationControlEvidence(
+            role: "AXButton", identifier: "chatrooms",
+            title: nil, description: nil, selected: nil,
+            enabled: false
+        )
+        #expect(!SendUIValidator.isStatelessChatsNavigationSet(disabled))
+    }
+
+    @Test("requires the complete current Kakao chat-row schema")
+    func currentChatRowStructure() {
+        let current = ChatRowStructureEvidence(
+            nonemptyNameLabelCount: 1,
+            profileControlCount: 1,
+            metadataLabelCount: 1,
+            messagePreviewCount: 1
+        )
+        #expect(SendUIValidator.isChatRowStructure(current))
+
+        let invalid = [
+            ChatRowStructureEvidence(
+                nonemptyNameLabelCount: 0, profileControlCount: 1,
+                metadataLabelCount: 1, messagePreviewCount: 1
+            ),
+            ChatRowStructureEvidence(
+                nonemptyNameLabelCount: 2, profileControlCount: 1,
+                metadataLabelCount: 1, messagePreviewCount: 1
+            ),
+            ChatRowStructureEvidence(
+                nonemptyNameLabelCount: 1, profileControlCount: 0,
+                metadataLabelCount: 1, messagePreviewCount: 1
+            ),
+            ChatRowStructureEvidence(
+                nonemptyNameLabelCount: 1, profileControlCount: 1,
+                metadataLabelCount: 0, messagePreviewCount: 1
+            ),
+            ChatRowStructureEvidence(
+                nonemptyNameLabelCount: 1, profileControlCount: 1,
+                metadataLabelCount: 1, messagePreviewCount: 0
+            ),
+        ]
+        for evidence in invalid {
+            #expect(!SendUIValidator.isChatRowStructure(evidence))
+        }
+    }
+
     @Test("rejects stale or unrelated windows")
     func staleWindows() throws {
         #expect(throws: SendUIError.self) {
@@ -52,13 +136,11 @@ struct SafeSendTests {
                 matchingRowCount: 1
             )
         }
-        #expect(throws: SendUIError.self) {
-            try SendUIValidator.preparation(
-                expectedTitle: "Exact Room",
-                openRooms: [OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: "")],
-                matchingRowCount: 1
-            )
-        }
+        #expect(try SendUIValidator.preparation(
+            expectedTitle: "Exact Room",
+            openRooms: [OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: "")],
+            matchingRowCount: 1
+        ) == .reuse)
         #expect(throws: SendUIError.self) {
             try SendUIValidator.preparation(
                 expectedTitle: "Exact Room",
@@ -96,6 +178,21 @@ struct SafeSendTests {
                 expectedTitle: "Exact Room",
                 openRooms: [OpenRoomEvidence(title: "Exact Room", composerCount: 2, composerText: "")],
                 matchingRowCount: 1
+            )
+        }
+    }
+
+    @Test("reuse still requires one exact destination row")
+    func reuseRequiresExactRow() {
+        let room = OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: "")
+        #expect(throws: SendUIError.self) {
+            try SendUIValidator.preparation(
+                expectedTitle: "Exact Room", openRooms: [room], matchingRowCount: 0
+            )
+        }
+        #expect(throws: SendUIError.self) {
+            try SendUIValidator.preparation(
+                expectedTitle: "Exact Room", openRooms: [room], matchingRowCount: 2
             )
         }
     }

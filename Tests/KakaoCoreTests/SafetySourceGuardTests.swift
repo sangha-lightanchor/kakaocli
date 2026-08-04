@@ -13,8 +13,18 @@ struct SafetySourceGuardTests {
             .filter { $0.pathExtension == "swift" } ?? []
         let forbidden = [
             ".activate(",
+            "activateIgnoringOtherApps",
             "kAXRaiseAction",
+            "kAXMainAttribute",
+            "kAXFocusedWindowAttribute",
+            "makeKeyAndOrderFront",
+            "orderFront",
+            "openApplication",
+            "launchApplication",
             "CGWarpMouseCursorPosition",
+            "CGDisplayMoveCursorToPoint",
+            "CGAssociateMouseAndMouseCursorPosition",
+            "CGEventTapPostEvent",
             ".post(tap:",
             "mouseEventSource:",
             "--foreground",
@@ -62,6 +72,19 @@ struct SafetySourceGuardTests {
         #expect(!implementation.contains("Task.detached"))
         #expect(!implementation.contains("DispatchQueue"))
         #expect(!implementation.contains("Continuation"))
+    }
+
+    @Test("background window discovery never activates KakaoTalk")
+    func backgroundWindowDiscovery() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let helpers = root.appendingPathComponent("Sources/KakaoCore/Automation/AXHelpers.swift")
+        let contents = try String(contentsOf: helpers, encoding: .utf8)
+        #expect(contents.contains("kAXWindowsAttribute"))
+        #expect(contents.contains("children(app).filter"))
+        #expect(contents.contains("kAXWindowRole"))
+        #expect(!contents.contains("NSRunningApplication"))
+        #expect(!contents.contains("kAXRaiseAction"))
     }
 
     @Test("confirmed-receipt recovery remains read-only and UI-free")

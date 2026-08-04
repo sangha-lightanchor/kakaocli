@@ -18,8 +18,18 @@ git diff --check
 
 if rg -n --fixed-strings --glob '*.swift' \
   -e '.activate(' \
+  -e 'activateIgnoringOtherApps' \
   -e 'kAXRaiseAction' \
+  -e 'kAXMainAttribute' \
+  -e 'kAXFocusedWindowAttribute' \
+  -e 'makeKeyAndOrderFront' \
+  -e 'orderFront' \
+  -e 'openApplication' \
+  -e 'launchApplication' \
   -e 'CGWarpMouseCursorPosition' \
+  -e 'CGDisplayMoveCursorToPoint' \
+  -e 'CGAssociateMouseAndMouseCursorPosition' \
+  -e 'CGEventTapPostEvent' \
   -e '.post(tap:' \
   -e 'mouseEventSource:' \
   -e '--foreground' Sources; then

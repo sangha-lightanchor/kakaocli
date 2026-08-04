@@ -69,9 +69,12 @@ The send transaction holds both the `KakaoClient` actor queue and
 
 - the ID exists in the local database;
 - the destination's display identity is unique across the source database;
-- the Chats tab is structurally selected and exactly one UI row represents
-  that destination;
-- no chat-room window is already open (window titles alone do not prove IDs);
+- the current Chats view is jointly proven by KakaoTalk's direct navigation
+  controls and one chat-only row schema, even when KakaoTalk does not expose a
+  selected-state attribute, and exactly one UI row represents the destination;
+- no unrelated or additional chat-room window is open; one exact target-title
+  room may be reused only with a globally unique database identity, one exact
+  destination row, and one empty composer;
 - row selection, focus, newly opened title, composer identity, and exact body;
 - one exact enabled Send control, or the verified focused composer before a
   Return event delivered only to KakaoTalk's process;

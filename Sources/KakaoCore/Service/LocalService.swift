@@ -443,7 +443,16 @@ final class ServiceLifetimeLock: @unchecked Sendable {
         guard fstat(opened, &info) == 0,
               info.st_uid == geteuid(),
               info.st_mode & S_IFMT == S_IFREG,
-              fchmod(opened, S_IRUSR | S_IWUSR) == 0 else {
+              info.st_nlink == 1 else {
+            Darwin.close(opened)
+            throw KakaoClientError.state("The service lifetime lock is not a secure regular file")
+        }
+        guard fchmod(opened, S_IRUSR | S_IWUSR) == 0,
+              fstat(opened, &info) == 0,
+              info.st_uid == geteuid(),
+              info.st_mode & S_IFMT == S_IFREG,
+              info.st_nlink == 1,
+              info.st_mode & 0o777 == 0o600 else {
             Darwin.close(opened)
             throw KakaoClientError.state("The service lifetime lock is not a secure regular file")
         }

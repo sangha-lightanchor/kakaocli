@@ -140,6 +140,25 @@ struct StateAndLockTests {
         #expect(try Data(contentsOf: target) == Data("keep".utf8))
     }
 
+    @Test("send lock rejects hard-linked targets before changing them")
+    func lockHardLink() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("unrelated")
+        let path = root.appendingPathComponent("send.lock")
+        #expect(FileManager.default.createFile(
+            atPath: target.path,
+            contents: Data("keep".utf8),
+            attributes: [.posixPermissions: 0o644]
+        ))
+        try FileManager.default.linkItem(at: target, to: path)
+        let lock = SendTransactionLock(path: path.path)
+        #expect(throws: KakaoClientError.self) { try lock.lock() }
+        #expect(try Data(contentsOf: target) == Data("keep".utf8))
+        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+        #expect(attributes[.posixPermissions] as? Int == 0o644)
+    }
+
     @Test("legacy import is idempotent and skips pending outbox")
     func migration() throws {
         let root = temporaryDirectory()

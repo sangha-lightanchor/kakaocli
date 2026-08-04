@@ -181,6 +181,10 @@ enum CompositionWindowValidator {
 
 /// Pure fail-closed decisions used by both the real transport and unit tests.
 public enum SendUIValidator {
+    static func isExplicitlyVisible(hidden: Bool?) -> Bool {
+        hidden == false
+    }
+
     public static func isSelectedChatsNavigation(_ evidence: NavigationControlEvidence) -> Bool {
         guard evidence.selected == true else { return false }
         if evidence.role == kAXCheckBoxRole as String,
@@ -699,7 +703,9 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         return AXHelpers.children(room).filter { element in
             guard AXHelpers.role(element) == kAXButtonRole as String,
                   AXHelpers.identifier(element) == nil,
-                  AXHelpers.bool(element, kAXHiddenAttribute as String) != true,
+                  SendUIValidator.isExplicitlyVisible(
+                      hidden: AXHelpers.bool(element, kAXHiddenAttribute as String)
+                  ),
                   AXHelpers.hasContainedFrame(element, in: room),
                   AXHelpers.actions(element).contains(kAXPressAction as String) else { return false }
             let labels = [AXHelpers.title(element), AXHelpers.description(element)]

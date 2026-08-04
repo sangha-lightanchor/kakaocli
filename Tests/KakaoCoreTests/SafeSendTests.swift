@@ -16,6 +16,13 @@ struct SafeSendTests {
         unreadCount: 0
     )
 
+    @Test("Send controls must explicitly report that they are visible")
+    func sendControlVisibility() {
+        #expect(SendUIValidator.isExplicitlyVisible(hidden: false))
+        #expect(!SendUIValidator.isExplicitlyVisible(hidden: true))
+        #expect(!SendUIValidator.isExplicitlyVisible(hidden: nil))
+    }
+
     @Test("recognizes only selected structural Chats navigation controls")
     func chatsNavigation() {
         #expect(SendUIValidator.isSelectedChatsNavigation(

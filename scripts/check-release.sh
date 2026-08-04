@@ -152,12 +152,22 @@ for composer_identifier in \
 done
 for send_control_guard in \
   'AXHelpers.identifier(element) == nil' \
-  'kAXHiddenAttribute as String) != true' \
+  'SendUIValidator.isExplicitlyVisible(' \
+  'hidden == false' \
   'AXHelpers.hasContainedFrame(element, in: room)' \
   'if !actionAttempted, composerMutationAttempted' \
   'if currentValue == body'; do
   if ! rg -q --fixed-strings "$send_control_guard" "$sender_source"; then
     print -u2 "exact Send-control guard is missing: $send_control_guard"
+    exit 1
+  fi
+done
+
+for lock_source in \
+  'Sources/KakaoCore/FileLock.swift' \
+  'Sources/KakaoCore/Service/LocalService.swift'; do
+  if ! rg -q --fixed-strings 'st_nlink == 1' "$lock_source"; then
+    print -u2 "hard-link rejection is missing from $lock_source"
     exit 1
   fi
 done

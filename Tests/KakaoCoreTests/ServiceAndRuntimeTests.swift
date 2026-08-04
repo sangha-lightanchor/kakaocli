@@ -46,6 +46,25 @@ struct ServiceAndRuntimeTests {
         second.unlock()
     }
 
+    @Test("service lifetime lock rejects hard-linked targets")
+    func lifetimeLockHardLink() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("unrelated")
+        let path = root.appendingPathComponent("service.lock")
+        #expect(FileManager.default.createFile(
+            atPath: target.path,
+            contents: Data("keep".utf8),
+            attributes: [.posixPermissions: 0o644]
+        ))
+        try FileManager.default.linkItem(at: target, to: path)
+        let lock = ServiceLifetimeLock(path: path.path)
+        #expect(throws: KakaoClientError.self) { try lock.lock() }
+        #expect(try Data(contentsOf: target) == Data("keep".utf8))
+        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+        #expect(attributes[.posixPermissions] as? Int == 0o644)
+    }
+
     @Test("service accepts same-user framed status and cleans its socket on stop")
     func serviceLifecycle() throws {
         let root = URL(fileURLWithPath: "/tmp/kc-\(UUID().uuidString.prefix(8))", isDirectory: true)

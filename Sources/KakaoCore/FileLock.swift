@@ -40,7 +40,17 @@ public final class SendTransactionLock: SendTransactionLocking, @unchecked Senda
         guard fstat(opened, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
               metadata.st_uid == geteuid(),
-              fchmod(opened, S_IRUSR | S_IWUSR) == 0,
+              metadata.st_nlink == 1 else {
+            Darwin.close(opened)
+            inProcessLock.unlock()
+            throw KakaoClientError.state("The send lock is not a secure regular file")
+        }
+        guard fchmod(opened, S_IRUSR | S_IWUSR) == 0,
+              fstat(opened, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == geteuid(),
+              metadata.st_nlink == 1,
+              metadata.st_mode & 0o777 == 0o600,
               flock(opened, LOCK_EX) == 0 else {
             Darwin.close(opened)
             inProcessLock.unlock()

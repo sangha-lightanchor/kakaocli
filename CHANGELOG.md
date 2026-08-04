@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.7 — Existing sender hardening
+
+- Keep the v1.0.6 exact-ID warm-up and control-only sender architecture.
+- Require the exact Send control to explicitly report `AXHidden == false`;
+  missing visibility evidence now fails before message composition.
+- Reject hard-linked send/service lock files before changing permissions or
+  acquiring them, and re-verify user ownership, type, link count, and mode.
+
 ## 1.0.6 — Exact-ID room warm-up
 
 - Add automatic, no-message room warm-up before sends and an explicit

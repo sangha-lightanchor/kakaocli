@@ -89,16 +89,22 @@ Your terminal app needs two permissions in **System Settings > Privacy & Securit
 # Check KakaoTalk installation and permissions
 kakaocli status
 
-# Verify database decryption
+# One-time identity discovery/cache refresh, then ordinary verification
+kakaocli auth --refresh
 kakaocli auth
 
 # List your most recent chats
 kakaocli chats --limit 10
 ```
 
-If `auth` succeeds, you're all set. All read commands work immediately — no KakaoTalk login or window required.
+If `auth` succeeds, you're all set. The user-only cache stores only the source
+database path and user ID; the SQLCipher key is derived in memory and never
+stored. Later read commands avoid expensive identity recovery and work without
+a KakaoTalk window.
 
-`auth`가 성공하면 준비 완료입니다. 모든 읽기 명령은 카카오톡 창 없이도 바로 작동합니다.
+`auth --refresh`를 한 번 실행하면 데이터베이스 경로와 사용자 ID만 사용자 전용
+캐시에 저장됩니다. 암호화 키는 저장하지 않고 메모리에서 계산하며, 이후 읽기
+명령은 카카오톡 창 없이 작동합니다.
 
 ### 4. Try it out / 사용해보기
 
@@ -136,7 +142,8 @@ kakaocli query "SELECT COUNT(*) FROM NTChatMessage"
 | Command | Description |
 |---------|-------------|
 | `kakaocli status` | Check KakaoTalk installation and permissions |
-| `kakaocli auth` | Verify database decryption |
+| `kakaocli auth` | Verify database decryption using cached local identity |
+| `kakaocli auth --refresh` | Explicitly recover and refresh database identity |
 | `kakaocli chats` | List chats sorted by last activity |
 | `kakaocli messages --chat "name"` | Show messages from a chat (substring match) |
 | `kakaocli search "keyword"` | Full-text search across all messages |
@@ -159,12 +166,14 @@ printf '%s' 'message' | kakaocli send --self --request-id UUID --dry-run
 or posts global input. KakaoTalk must already be running with its main window
 rendered. The command resolves the ID through the local database, requires one
 database-unique UI identity and one exact row in the structurally verified,
-selected Chats tab, rejects every already-open room and all drafts, verifies
-selection/focus/window title/composer/control identity immediately before the
-action, and uses one exact Send control or a focused-composer Return event
-delivered only to KakaoTalk's process. A same-process mutex and cross-process
-lock cover the whole resolution, UI, and exact database-confirmation
-transaction. Bodies are capped at 64 KiB of UTF-8.
+current Chats table, rejects unrelated rooms and all drafts, and may reuse only
+one exact open target room with a certified empty composer. For a closed room,
+the exact row-opening Return event is delivered only to KakaoTalk's PID and the
+command aborts if the foreground app changes. Composition never focuses the
+composer; delivery uses the same direct, visible, frame-contained Send control
+after rechecking the current room/composer/control and database identity. A
+same-process mutex and cross-process lock cover the whole resolution, UI, and
+exact database-confirmation transaction. Bodies are capped at 64 KiB of UTF-8.
 
 ### Sync / 동기화
 

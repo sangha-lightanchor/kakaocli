@@ -14,10 +14,16 @@ the already-rendered KakaoTalk UI. Treat sending as an irreversible action.
 ## Read commands
 
 ```bash
-kakaocli auth
+kakaocli auth --refresh  # one-time identity discovery/cache refresh
+kakaocli auth            # later verification uses the local identity cache
 kakaocli chats --json
 kakaocli messages --chat-id 123456 --json
 ```
+
+The mode-0600 cache at `~/.kakaocli/source-database.json` contains only the
+standardized database path and Kakao user ID. The SQLCipher key is derived in
+memory and is never persisted. Expensive revision-hash recovery runs only for
+an explicit `auth --refresh`.
 
 ## Sending
 
@@ -38,11 +44,17 @@ The safe send path:
 - accepts only `--chat-id` or `--self`; names and substring matches are rejected;
 - serializes the whole transaction across threads and processes;
 - requires a database-unique display identity and the structurally verified,
-  selected Chats tab, and rejects duplicate UI rows, every already-open room,
-  nonempty drafts, ambiguous composers, wrong window titles, and lost focus;
+  selected/current Chats table, and rejects duplicate UI rows, unrelated open
+  rooms, nonempty drafts, ambiguous composers, and wrong window titles;
+- may reuse exactly one open target room only when its current Kakao room and
+  composition structure are certified and its composer is provably empty;
 - never activates or raises KakaoTalk, moves the pointer, or posts global input;
-- submits only through one exact Accessibility Send control or a Return event
-  targeted to KakaoTalk's PID while the verified composer remains focused;
+- opens a closed exact row with a Kakao-PID-targeted Return event, aborting if
+  the foreground app changes, and submits only through the same direct,
+  visible, frame-contained Accessibility Send control;
+- never focuses the composer and proves the foreground app remains unchanged
+  through composition and the Send action;
+- re-resolves the destination database identity immediately before Send;
 - confirms the exact UTF-8 bytes as a new outgoing row under the intended
   `chat_id` before returning `confirmed`;
 - records `unknown` durably when submission may have happened but confirmation
@@ -54,8 +66,9 @@ Message bodies are limited to 64 KiB of UTF-8 and `send` never accepts a
 database key in process arguments.
 
 Reusing a request ID returns its stored receipt. Reusing it with different
-contents is rejected. A precondition failure occurs before composition and is
-safe to correct and retry with the same request ID.
+contents is rejected. A precondition failure before composer mutation is safe
+to correct and retry with the same request ID. Any uncertainty after composer
+mutation is durably `unknown` and must not trigger another UI attempt.
 
 ## Development and release checks
 

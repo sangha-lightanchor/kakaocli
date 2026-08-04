@@ -4,11 +4,12 @@ import Foundation
 struct OpenRoomEvidence: Equatable {
     let title: String
     let composerCount: Int
-    let composerText: String
+    let composerText: String?
 }
 
 enum RoomPreparation: Equatable {
     case openExactRow
+    case reuseExactRoom
 }
 
 struct NavigationControlEvidence: Equatable {
@@ -85,17 +86,10 @@ enum BackgroundSendSelector {
     }
 
     static func preparation(
-        expectedTitle _: String,
+        expectedTitle: String,
         openRooms: [OpenRoomEvidence],
         matchingRowCount: Int
     ) throws -> RoomPreparation {
-        // A window title is not a stable chat identity. Different chats can
-        // share one title, so an already-open room is never safe to reuse.
-        guard openRooms.isEmpty else {
-            throw AutomationError.preconditionFailed(
-                "A chat room is already open; close it manually before sending"
-            )
-        }
         guard matchingRowCount == 1 else {
             throw AutomationError.preconditionFailed(
                 matchingRowCount == 0
@@ -103,7 +97,19 @@ enum BackgroundSendSelector {
                     : "The destination label matches multiple rows"
             )
         }
-        return .openExactRow
+
+        if openRooms.isEmpty {
+            return .openExactRow
+        }
+        guard openRooms.count == 1,
+              openRooms[0].title == expectedTitle,
+              openRooms[0].composerCount == 1,
+              openRooms[0].composerText == "" else {
+            throw AutomationError.preconditionFailed(
+                "Only one exact target room with a provably empty composer may be reused"
+            )
+        }
+        return .reuseExactRoom
     }
 
     static func verifyFinalRoom(

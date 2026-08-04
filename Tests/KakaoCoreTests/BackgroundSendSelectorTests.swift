@@ -5,11 +5,19 @@ import Testing
 
 @Suite("Fail-closed send selection")
 struct BackgroundSendSelectorTests {
-    @Test("rejects every already-open room, including an exact empty-title match")
-    func openRooms() {
+    @Test("reuses only one exact room with one provably empty composer")
+    func openRooms() throws {
+        #expect(try BackgroundSendSelector.preparation(
+            expectedTitle: "Target",
+            openRooms: [OpenRoomEvidence(title: "Target", composerCount: 1, composerText: "")],
+            matchingRowCount: 1
+        ) == .reuseExactRoom)
+
         for rooms in [
-            [OpenRoomEvidence(title: "Target", composerCount: 1, composerText: "")],
             [OpenRoomEvidence(title: "Other", composerCount: 1, composerText: "")],
+            [OpenRoomEvidence(title: "Target", composerCount: 0, composerText: nil)],
+            [OpenRoomEvidence(title: "Target", composerCount: 1, composerText: nil)],
+            [OpenRoomEvidence(title: "Target", composerCount: 1, composerText: "draft")],
             [
                 OpenRoomEvidence(title: "Target", composerCount: 1, composerText: ""),
                 OpenRoomEvidence(title: "Other", composerCount: 1, composerText: ""),

@@ -53,10 +53,10 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             return OpenRoomEvidence(
                 title: AXHelpers.title(window) ?? "",
                 composerCount: composers.count,
-                composerText: composers.first.flatMap(AXHelpers.value) ?? ""
+                composerText: composers.first.flatMap(AXHelpers.value)
             )
         }
-        _ = try BackgroundSendSelector.preparation(
+        let preparation = try BackgroundSendSelector.preparation(
             expectedTitle: expectedTitle,
             openRooms: evidence,
             matchingRowCount: rows.count
@@ -65,43 +65,61 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         guard let row = rows.first else {
             throw AutomationError.preconditionFailed("The chat list changed during destination resolution")
         }
-        guard AXHelpers.selectRow(row, in: table) else {
-            throw AutomationError.preconditionFailed("The exact destination row could not be verified as selected")
-        }
-        guard AXHelpers.focus(table), AXHelpers.isFocused(table) else {
-            throw AutomationError.preconditionFailed("The chat list did not retain focus")
-        }
-        guard let openEvent = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
-              let openRelease = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else {
-            throw AutomationError.preconditionFailed("Could not create the KakaoTalk-targeted Return event")
+        let room: AXUIElement
+        switch preparation {
+        case .reuseExactRoom:
+            guard roomWindows.count == 1, let exactRoom = roomWindows.first else {
+                throw AutomationError.preconditionFailed("The exact target room changed before reuse")
+            }
+            room = exactRoom
+        case .openExactRow:
+            guard AXHelpers.selectRow(row, in: table) else {
+                throw AutomationError.preconditionFailed(
+                    "The exact destination row could not be verified as selected"
+                )
+            }
+            guard AXHelpers.focus(table), AXHelpers.isFocused(table) else {
+                throw AutomationError.preconditionFailed("The chat list did not retain focus")
+            }
+            guard let openEvent = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
+                  let openRelease = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else {
+                throw AutomationError.preconditionFailed("Could not create the KakaoTalk-targeted Return event")
+            }
+
+            let currentWindows = AXHelpers.windows(app)
+            let currentTable = AXHelpers.verifiedSendChatListTable(mainWindow)
+            let currentRows = currentTable.map { matchingRows(in: $0, chat: chat) } ?? []
+            guard !runningApp.isTerminated,
+                  currentWindows.count == 1,
+                  currentWindows.first.map({ CFEqual($0, mainWindow) }) == true,
+                  let currentTable,
+                  CFEqual(currentTable, table),
+                  currentRows.count == 1,
+                  currentRows.first.map({ CFEqual($0, row) }) == true,
+                  AXHelpers.isExactlySelected(row, in: currentTable),
+                  AXHelpers.isFocused(currentTable) else {
+                throw AutomationError.preconditionFailed(
+                    "Destination selection changed before the room was opened"
+                )
+            }
+            openEvent.postToPid(processID)
+            openRelease.postToPid(processID)
+
+            room = try waitForExactRoom(
+                app: app,
+                mainWindow: mainWindow,
+                expectedTitle: expectedTitle
+            )
         }
 
-        let currentWindows = AXHelpers.windows(app)
-        let currentTable = AXHelpers.verifiedSendChatListTable(mainWindow)
-        let currentRows = currentTable.map { matchingRows(in: $0, chat: chat) } ?? []
-        guard !runningApp.isTerminated,
-              currentWindows.count == 1,
-              currentWindows.first.map({ CFEqual($0, mainWindow) }) == true,
-              let currentTable,
-              CFEqual(currentTable, table),
-              currentRows.count == 1,
-              currentRows.first.map({ CFEqual($0, row) }) == true,
-              AXHelpers.isExactlySelected(row, in: currentTable),
-              AXHelpers.isFocused(currentTable) else {
-            throw AutomationError.preconditionFailed("Destination selection changed before the room was opened")
-        }
-        openEvent.postToPid(processID)
-        openRelease.postToPid(processID)
-
-        let room = try waitForExactRoom(app: app, mainWindow: mainWindow, expectedTitle: expectedTitle)
         windows = AXHelpers.windows(app)
         guard windows.count == 2,
               windows.contains(where: { CFEqual($0, mainWindow) }),
               windows.contains(where: { CFEqual($0, room) }) else {
-            throw AutomationError.preconditionFailed("An unrelated room appeared while opening the destination")
+            throw AutomationError.preconditionFailed("An unrelated room appeared before composition")
         }
         guard AXHelpers.title(room) == expectedTitle else {
-            throw AutomationError.preconditionFailed("The opened room title does not exactly match the destination")
+            throw AutomationError.preconditionFailed("The target room title does not exactly match the destination")
         }
 
         let composers = composerCandidates(in: room)
@@ -130,6 +148,9 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                     app: app,
                     mainWindow: mainWindow,
                     room: room,
+                    table: table,
+                    row: row,
+                    chat: chat,
                     expectedTitle: expectedTitle,
                     composer: composer,
                     body: message
@@ -144,6 +165,9 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                           app: app,
                           mainWindow: mainWindow,
                           room: room,
+                          table: table,
+                          row: row,
+                          chat: chat,
                           expectedTitle: expectedTitle,
                           composer: composer,
                           body: message
@@ -164,6 +188,9 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                     app: app,
                     mainWindow: mainWindow,
                     room: room,
+                    table: table,
+                    row: row,
+                    chat: chat,
                     expectedTitle: expectedTitle,
                     composer: composer,
                     body: message
@@ -173,6 +200,9 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                        app: app,
                        mainWindow: mainWindow,
                        room: room,
+                       table: table,
+                       row: row,
+                       chat: chat,
                        expectedTitle: expectedTitle,
                        composer: composer,
                        body: message
@@ -237,12 +267,24 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         app: AXUIElement,
         mainWindow: AXUIElement,
         room: AXUIElement,
+        table: AXUIElement,
+        row: AXUIElement,
+        chat: Chat,
         expectedTitle: String,
         composer: AXUIElement,
         body: String
     ) -> Bool {
         let windows = AXHelpers.windows(app)
         let composers = composerCandidates(in: room)
+        guard let currentTable = AXHelpers.verifiedSendChatListTable(mainWindow),
+              CFEqual(currentTable, table) else {
+            return false
+        }
+        let currentRows = matchingRows(in: currentTable, chat: chat)
+        guard currentRows.count == 1,
+              currentRows.first.map({ CFEqual($0, row) }) == true else {
+            return false
+        }
         do {
             try BackgroundSendSelector.verifyFinalRoom(
                 expectedTitle: expectedTitle,

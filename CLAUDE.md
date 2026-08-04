@@ -32,6 +32,14 @@ The package requires Homebrew SQLCipher and uses Swift Argument Parser.
 - `DatabaseLocator` caches only a mode-0600 database path/user-ID identity. It
   derives the SQLCipher key in memory; expensive identity recovery is explicit
   through `kakaocli auth --refresh`.
+- Database-key overrides are stdin-only. `DatabaseReader` uses the typed
+  SQLCipher key API, accepts only a user-owned regular source file, enables
+  query-only mode, and rejects writable, attached, or multi-statement raw SQL.
+- Remote webhooks require HTTPS except for loopback development endpoints and
+  must not contain URL credentials; redirect targets are revalidated before
+  following them.
+- Harvest metadata is atomically persisted as a mode-0600 user-owned regular
+  file. Symlinked or corrupt metadata state fails closed.
 
 An automation error after the submit action becomes an `unknown` receipt.
 Replaying the exact request ID may reconcile it from the database but must

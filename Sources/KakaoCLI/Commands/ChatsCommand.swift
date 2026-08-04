@@ -17,11 +17,14 @@ struct ChatsCommand: ParsableCommand {
     @Option(name: .long, help: "Path to database file (auto-detected if not set)")
     var db: String?
 
-    @Option(name: .long, help: "Database encryption key (auto-derived if not set)")
-    var key: String?
+    @Flag(name: .customLong("key-stdin"), help: "Read a one-shot database key from stdin")
+    var keyStdin = false
 
     func run() throws {
-        let reader = try openDatabase(dbPath: db, key: key)
+        let reader = try openDatabase(
+            dbPath: db,
+            key: databaseKeyFromStdin(ifRequested: keyStdin)
+        )
         defer { reader.close() }
 
         let chats = try reader.chats(limit: limit)

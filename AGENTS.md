@@ -23,7 +23,8 @@ kakaocli messages --chat-id 123456 --json
 The mode-0600 cache at `~/.kakaocli/source-database.json` contains only the
 standardized database path and Kakao user ID. The SQLCipher key is derived in
 memory and is never persisted. Expensive revision-hash recovery runs only for
-an explicit `auth --refresh`.
+an explicit `auth --refresh`. Commands never accept a database key as an
+argument; an exceptional one-shot override must use `--key-stdin`.
 
 ## Sending
 
@@ -54,6 +55,8 @@ The safe send path:
   visible, frame-contained Accessibility Send control;
 - never focuses the composer and proves the foreground app remains unchanged
   through composition and the Send action;
+- bounds KakaoTalk Accessibility messaging calls so a stalled AX server fails
+  closed instead of hanging indefinitely;
 - re-resolves the destination database identity immediately before Send;
 - confirms the exact UTF-8 bytes as a new outgoing row under the intended
   `chat_id` before returning `confirmed`;
@@ -83,3 +86,9 @@ or external message before installing or tagging a release.
 
 Other commands such as `login` and `harvest` are separate legacy workflows and
 may foreground KakaoTalk. They are not called by `send`.
+
+`query` accepts exactly one SQLite read-only statement. Writes, database
+attachments, and trailing statements are rejected. Remote webhook endpoints
+must use HTTPS; plain HTTP is accepted only for loopback development, and every
+redirect is revalidated. Harvested chat-name metadata is stored atomically with
+user-only permissions and rejects symlinked state.

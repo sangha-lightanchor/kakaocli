@@ -15,6 +15,11 @@
 - Cache only the mode-0600 source database path/user ID, derive SQLCipher keys in memory, and make expensive identity recovery explicit through `auth --refresh`
 - Stop `status` from querying the legacy credential Keychain or causing an unrelated permission prompt
 - Stop self-chat and composer discovery at certified UI containers instead of recursively scanning message previews/history
+- Replace SQL-interpolated database keys with SQLCipher's typed key API and remove key-bearing CLI arguments in favor of bounded `--key-stdin`
+- Enforce user-owned regular database files, SQLite query-only mode, and one read-only raw statement with no attach or trailing SQL
+- Require HTTPS for remote webhooks, reject URL credentials and downgrade redirects, use an ephemeral cookie-free session, and bound sync intervals
+- Persist harvested chat-name metadata atomically in a user-owned mode-0600 file and reject symlinked or corrupt state
+- Bound KakaoTalk Accessibility messaging so stalled AX calls fail closed instead of hanging indefinitely
 - Harden state and lock files against symlinks, wrong owners, and non-user permissions; give each confirmed chat/log row one durable request owner
 - Reconcile stored `unknown` attempts read-only under the same request ID without repeating UI work
 - Limit send bodies to 64 KiB and remove source-database keys from send-process arguments

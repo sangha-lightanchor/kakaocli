@@ -1,4 +1,5 @@
 import CSQLCipher
+import Darwin
 import Foundation
 
 /// Reads KakaoTalk's encrypted SQLite database using SQLCipher.
@@ -14,14 +15,27 @@ public final class DatabaseReader: @unchecked Sendable {
         close()
     }
 
-    /// Open the database. If a key is provided, attempts PRAGMA key (requires SQLCipher).
+    /// Open the database. If a key is provided, uses SQLCipher's typed key API.
     /// Tries cipher compatibility modes 3 and 4 (for newer KakaoTalk versions).
     public func open(key: String? = nil) throws {
         guard FileManager.default.fileExists(atPath: databasePath) else {
             throw KakaoError.databaseNotFound(databasePath)
         }
+        var databaseMetadata = stat()
+        guard lstat(databasePath, &databaseMetadata) == 0,
+              databaseMetadata.st_mode & S_IFMT == S_IFREG,
+              databaseMetadata.st_uid == geteuid() else {
+            throw KakaoError.databaseOpenFailed(
+                "Database must be a user-owned regular file, not a symbolic link"
+            )
+        }
+
+        let openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
 
         if let key {
+            guard !key.isEmpty else {
+                throw KakaoError.databaseOpenFailed("SQLCipher key cannot be empty")
+            }
             // Try compatibility mode 3 first (legacy), then 4 (newer versions)
             let compatModes = [3, 4]
             for compat in compatModes {
@@ -30,7 +44,7 @@ public final class DatabaseReader: @unchecked Sendable {
 
                 let result = sqlite3_open_v2(
                     databasePath, &db,
-                    SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil
+                    openFlags, nil
                 )
                 guard result == SQLITE_OK else {
                     let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
@@ -39,27 +53,35 @@ public final class DatabaseReader: @unchecked Sendable {
 
                 do {
                     try exec("PRAGMA cipher_default_compatibility = \(compat)")
-                    try exec("PRAGMA KEY='\(key)'")
+                    let keyResult = Data(key.utf8).withUnsafeBytes { bytes in
+                        sqlite3_key(db, bytes.baseAddress, Int32(bytes.count))
+                    }
+                    guard keyResult == SQLITE_OK else {
+                        throw KakaoError.databaseOpenFailed("sqlite3_key rejected the key")
+                    }
                     try exec("SELECT count(*) FROM sqlite_master")
+                    try exec("PRAGMA query_only = ON")
                     return // success
                 } catch {
                     continue
                 }
             }
+            close()
             throw KakaoError.databaseOpenFailed(
-                "PRAGMA key failed with all cipher compatibility modes — " +
+                "SQLCipher keying failed with all compatibility modes — " +
                 "database is encrypted and key may be wrong, or SQLCipher may not be linked. " +
                 "Install via: brew install sqlcipher"
             )
         } else {
             let result = sqlite3_open_v2(
                 databasePath, &db,
-                SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil
+                openFlags, nil
             )
             guard result == SQLITE_OK else {
                 let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
                 throw KakaoError.databaseOpenFailed(msg)
             }
+            try exec("PRAGMA query_only = ON")
         }
     }
 
@@ -315,15 +337,29 @@ public final class DatabaseReader: @unchecked Sendable {
     /// Run an arbitrary read-only SQL query and return results as arrays of Any.
     public func rawQuery(_ sql: String) throws -> [[Any]] {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+        var trailingSQL = ""
+        let prepareResult = sql.withCString { input -> Int32 in
+            var tail: UnsafePointer<CChar>?
+            let result = sqlite3_prepare_v2(db, input, -1, &stmt, &tail)
+            if let tail { trailingSQL = String(cString: tail) }
+            return result
+        }
+        guard prepareResult == SQLITE_OK, let stmt else {
             let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
             throw KakaoError.sqlError("prepare: \(msg)")
         }
         defer { sqlite3_finalize(stmt) }
+        guard trailingSQL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw KakaoError.sqlError("Only one SQL statement is allowed")
+        }
+        guard sqlite3_stmt_readonly(stmt) != 0 else {
+            throw KakaoError.sqlError("Only read-only SQL statements are allowed")
+        }
 
         let colCount = sqlite3_column_count(stmt)
         var results: [[Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var stepResult = sqlite3_step(stmt)
+        while stepResult == SQLITE_ROW {
             var row: [Any] = []
             for i in 0..<colCount {
                 switch sqlite3_column_type(stmt, i) {
@@ -332,7 +368,11 @@ public final class DatabaseReader: @unchecked Sendable {
                 case SQLITE_FLOAT:
                     row.append(sqlite3_column_double(stmt, i))
                 case SQLITE_TEXT:
-                    row.append(String(cString: sqlite3_column_text(stmt, i)))
+                    if let text = sqlite3_column_text(stmt, i) {
+                        row.append(String(cString: text))
+                    } else {
+                        row.append("")
+                    }
                 case SQLITE_NULL:
                     row.append("")
                 default:
@@ -340,6 +380,11 @@ public final class DatabaseReader: @unchecked Sendable {
                 }
             }
             results.append(row)
+            stepResult = sqlite3_step(stmt)
+        }
+        guard stepResult == SQLITE_DONE else {
+            let message = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw KakaoError.sqlError("step: \(message)")
         }
         return results
     }
@@ -402,8 +447,14 @@ public final class DatabaseReader: @unchecked Sendable {
         }
 
         var results: [T] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var stepResult = sqlite3_step(stmt)
+        while stepResult == SQLITE_ROW {
             results.append(transform(Row(stmt: stmt!)))
+            stepResult = sqlite3_step(stmt)
+        }
+        guard stepResult == SQLITE_DONE else {
+            let message = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw KakaoError.sqlError("step: \(message)")
         }
         return results
     }

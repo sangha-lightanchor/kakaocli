@@ -102,6 +102,11 @@ database path and user ID; the SQLCipher key is derived in memory and never
 stored. Later read commands avoid expensive identity recovery and work without
 a KakaoTalk window.
 
+Database-key overrides are exceptional and stdin-only: use `--key-stdin` with
+the relevant read command. There is no `--key` argument, so a key cannot enter
+shell history or the process list. Raw `query` accepts exactly one read-only SQL
+statement and rejects writes, attached databases, and trailing statements.
+
 `auth --refresh`를 한 번 실행하면 데이터베이스 경로와 사용자 ID만 사용자 전용
 캐시에 저장됩니다. 암호화 키는 저장하지 않고 메모리에서 계산하며, 이후 읽기
 명령은 카카오톡 창 없이 작동합니다.
@@ -183,6 +188,10 @@ kakaocli sync --follow --interval 1                  # Poll every 1 second
 kakaocli sync --follow --webhook http://localhost:8080/kakao  # POST to webhook
 ```
 
+Remote webhook URLs must use HTTPS. Plain HTTP is accepted only for
+`localhost`, `127.0.0.1`, or `::1` development endpoints; URL credentials are
+rejected and redirects are checked against the same policy before following.
+
 See [AGENTS.md](AGENTS.md) for AI agent integration instructions.
 
 ### Harvest / 수집
@@ -199,6 +208,9 @@ The harvest command iterates through your chat list to:
 2. With `--scroll`: open each chat, scroll to top, click "View Previous Chats" to load older messages
 3. Auto-dismiss **Talk Drive Plus paywall** popups
 4. Save metadata to `~/.kakaocli/metadata.json`
+
+The metadata file is written atomically with user-only permissions. Symlinked
+or corrupt metadata state is rejected instead of followed or overwritten.
 
 Chats with unread messages are skipped to avoid marking them as read.
 

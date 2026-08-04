@@ -30,6 +30,8 @@ kakaocli search "keyword" --json
 
 Name and substring filters may help discovery, but they are never send
 destinations. Resolve and verify the stable numeric `chat_id` first.
+Database keys are never command arguments; use `--key-stdin` only for an
+exceptional one-shot read override.
 
 ## Send
 

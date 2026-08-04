@@ -36,16 +36,19 @@ struct HarvestCommand: ParsableCommand {
     @Option(name: .long, help: "Path to database file")
     var db: String?
 
-    @Option(name: .long, help: "Database encryption key")
-    var key: String?
+    @Flag(name: .customLong("key-stdin"), help: "Read a one-shot database key from stdin")
+    var keyStdin = false
 
     func run() throws {
-        let (path, secureKey) = try resolveDatabasePath(dbPath: db, key: key)
+        let (path, secureKey) = try resolveDatabasePath(
+            dbPath: db,
+            key: databaseKeyFromStdin(ifRequested: keyStdin)
+        )
         let reader = DatabaseReader(databasePath: path)
         try reader.open(key: secureKey)
         defer { reader.close() }
 
-        let metadata = MetadataStore()
+        let metadata = try MetadataStore()
 
         if dryRun {
             let limit = top > 0 ? top : 1000

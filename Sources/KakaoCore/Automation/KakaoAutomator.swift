@@ -47,6 +47,11 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
 
         let processID = runningApp.processIdentifier
         let app = AXUIElementCreateApplication(processID)
+        guard AXUIElementSetMessagingTimeout(app, 2.0) == .success else {
+            throw AutomationError.preconditionFailed(
+                "KakaoTalk Accessibility messaging could not be safely bounded"
+            )
+        }
         var windows = AXHelpers.windows(app)
         let mainWindows = windows.filter {
             AXHelpers.role($0) == kAXWindowRole as String

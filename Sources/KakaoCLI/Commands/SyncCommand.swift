@@ -23,11 +23,17 @@ struct SyncCommand: ParsableCommand {
     @Option(name: .long, help: "Path to database file")
     var db: String?
 
-    @Option(name: .long, help: "Database encryption key")
-    var key: String?
+    @Flag(name: .customLong("key-stdin"), help: "Read a one-shot database key from stdin")
+    var keyStdin = false
 
     func run() throws {
-        let (path, secureKey) = try resolveDatabasePath(dbPath: db, key: key)
+        guard interval.isFinite, interval >= 0.1 else {
+            throw ValidationError("--interval must be at least 0.1 seconds")
+        }
+        let (path, secureKey) = try resolveDatabasePath(
+            dbPath: db,
+            key: databaseKeyFromStdin(ifRequested: keyStdin)
+        )
 
         if !follow && webhook == nil {
             // One-shot: show current high-water mark
@@ -40,7 +46,13 @@ struct SyncCommand: ParsableCommand {
         }
 
         let webhookPublisher: WebhookPublisher?
-        if let webhookUrl = webhook, let url = URL(string: webhookUrl) {
+        if let webhookUrl = webhook {
+            guard let url = URL(string: webhookUrl),
+                  WebhookPublisher.isAllowedEndpoint(url) else {
+                throw ValidationError(
+                    "--webhook must use HTTPS (plain HTTP is allowed only for loopback)"
+                )
+            }
             webhookPublisher = WebhookPublisher(url: url)
             fputs("Webhook: \(webhookUrl)\n", stderr)
         } else {

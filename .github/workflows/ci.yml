@@ -21,6 +21,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Select Swift 6 toolchain on macOS 14
+        if: matrix.runner == 'macos-14'
+        run: sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
       - name: Install build tools
         run: brew install sqlcipher ripgrep
       - name: Verify Swift package lock
@@ -36,6 +39,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Select Swift 6 toolchain
+        run: sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
       - run: brew install sqlcipher ripgrep
       - name: Refuse non-portable binary artifacts
         env:

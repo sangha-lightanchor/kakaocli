@@ -1,5 +1,6 @@
 import CSQLCipher
 import CryptoKit
+import Darwin
 import Foundation
 
 public struct LegacyMigrationReport: Codable, Sendable {
@@ -29,11 +30,9 @@ public final class LegacyMigrator: @unchecked Sendable {
         let messages = try ReadOnlySQLite(path: messagesDatabase.path)
         defer { messages.close() }
         let rows = try messages.messageRows()
-        var chats: Set<ChatID> = []
         var backfilled = 0
         for row in rows {
             let chatID = ChatID(rawValue: row.chatID)
-            chats.insert(chatID)
             let rawAttachment = try sourceDatabase?.attachmentMetadata(logID: row.logID)
             if rawAttachment != nil { backfilled += 1 }
             try state.importMessage(
@@ -44,8 +43,6 @@ public final class LegacyMigrator: @unchecked Sendable {
                 rawAttachment: rawAttachment
             )
         }
-        for chatID in chats { try state.allow(chatID: chatID) }
-
         let skipped = try messages.pendingOutboxCount()
         var complete = 0
         var expired = 0
@@ -54,13 +51,17 @@ public final class LegacyMigrator: @unchecked Sendable {
             defer { media.close() }
             for row in try media.mediaRows() {
                 let rawAttachment = try sourceDatabase?.attachmentMetadata(logID: row.logID)
-                try state.importMessage(
-                    logID: row.logID,
-                    chatID: ChatID(rawValue: row.chatID),
-                    timestamp: row.timestamp,
-                    payload: Data("{}".utf8),
-                    rawAttachment: rawAttachment
-                )
+                // Do not patch an existing row with an empty payload: the v1
+                // importer did so and changed outgoing media to incoming.
+                if try !state.hasArchivedMessage(logID: row.logID) {
+                    try state.importMessage(
+                        logID: row.logID,
+                        chatID: ChatID(rawValue: row.chatID),
+                        timestamp: row.timestamp,
+                        payload: Data("{}".utf8),
+                        rawAttachment: rawAttachment
+                    )
+                }
                 let idSeed = "attachment:\(row.logID):video"
                 let id = SHA256.hash(data: Data(idSeed.utf8)).map { String(format: "%02x", $0) }.joined()
                 let attachment = NormalizedAttachment(
@@ -88,6 +89,16 @@ public final class LegacyMigrator: @unchecked Sendable {
                         continue
                     }
                     let data = try Data(contentsOf: source, options: [.mappedIfSafe])
+                    if let expected = row.expectedBytes, expected > 0, Int64(data.count) != expected {
+                        throw KakaoClientError.state("Archived object size mismatch for log ID \(row.logID)")
+                    }
+                    if let sourceSHA1 = row.sourceSHA1 {
+                        let verifiedSHA1 = Insecure.SHA1.hash(data: data)
+                            .map { String(format: "%02x", $0) }.joined()
+                        guard verifiedSHA1 == sourceSHA1.lowercased() else {
+                            throw KakaoClientError.state("Archived object source checksum mismatch for log ID \(row.logID)")
+                        }
+                    }
                     let verified = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
                     guard verified == hash.lowercased() else {
                         throw KakaoClientError.state("Archived object checksum mismatch for log ID \(row.logID)")
@@ -99,10 +110,21 @@ public final class LegacyMigrator: @unchecked Sendable {
                         withIntermediateDirectories: true,
                         attributes: [.posixPermissions: 0o700]
                     )
+                    _ = chmod(directory.path, 0o700)
                     let destination = directory.appendingPathComponent(verified)
-                    if !FileManager.default.fileExists(atPath: destination.path) {
+                    if !pathExistsWithoutFollowing(destination) {
                         try data.write(to: destination, options: [.atomic])
                         _ = chmod(destination.path, 0o600)
+                    } else {
+                        guard isRegularOwnedFile(destination) else {
+                            throw KakaoClientError.state("Existing archive object was not a safe regular file for log ID \(row.logID)")
+                        }
+                        let existing = try Data(contentsOf: destination, options: [.mappedIfSafe])
+                        let existingHash = SHA256.hash(data: existing)
+                            .map { String(format: "%02x", $0) }.joined()
+                        guard existing.count == data.count, existingHash == verified else {
+                            throw KakaoClientError.state("Existing archive object failed verification for log ID \(row.logID)")
+                        }
                     }
                     let relative = "objects/\(prefix)/\(verified)"
                     try state.registerObject(sha256: verified, bytes: Int64(data.count), relativePath: relative)
@@ -127,25 +149,49 @@ public final class LegacyMigrator: @unchecked Sendable {
         try state.recordMigration(key: "legacy.messages", value: String(rows.count))
         try state.recordMigration(key: "legacy.outbox_skipped", value: String(skipped))
         try state.recordMigration(key: "legacy.webhook_migrated", value: "false")
+        try state.recordMigration(key: "legacy.direction_reaudit", value: "replayed_source_messages")
         return LegacyMigrationReport(
             messagesImported: rows.count,
             attachmentsBackfilled: backfilled,
             mediaCompleteImported: complete,
             mediaExpiredImported: expired,
             pendingOutboxSkipped: skipped,
-            allowedChatsImported: chats.count
+            allowedChatsImported: 0
         )
     }
 
     private func resolveObject(row: MediaRow, mediaRoot: URL?) -> URL? {
-        if let objectPath = row.objectPath, !objectPath.isEmpty {
-            return URL(fileURLWithPath: objectPath)
+        guard let mediaRoot,
+              let canonicalRoot = canonicalPath(mediaRoot) else { return nil }
+        if let objectPath = row.objectPath, !objectPath.isEmpty,
+           let canonical = canonicalPath(URL(fileURLWithPath: objectPath)),
+           canonical == canonicalRoot || canonical.hasPrefix(canonicalRoot + "/") {
+            let source = URL(fileURLWithPath: canonical)
+            return isRegularOwnedFile(source) ? source : nil
         }
-        guard let mediaRoot, let sha256 = row.sha256 else { return nil }
+        guard let sha256 = row.sha256 else { return nil }
         let exact = mediaRoot.appendingPathComponent("objects/\(sha256)")
-        if FileManager.default.fileExists(atPath: exact.path) { return exact }
+        if isRegularOwnedFile(exact) { return exact }
         let mp4 = mediaRoot.appendingPathComponent("objects/\(sha256).mp4")
-        return mp4
+        return isRegularOwnedFile(mp4) ? mp4 : nil
+    }
+
+    private func canonicalPath(_ url: URL) -> String? {
+        guard let value = realpath(url.path, nil) else { return nil }
+        defer { free(value) }
+        return String(cString: value)
+    }
+
+    private func isRegularOwnedFile(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0
+            && info.st_mode & S_IFMT == S_IFREG
+            && info.st_uid == geteuid()
+    }
+
+    private func pathExistsWithoutFollowing(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0
     }
 }
 

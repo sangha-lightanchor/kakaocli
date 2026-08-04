@@ -78,7 +78,22 @@ enum AXHelpers {
     }
 
     static func chatList(in mainWindow: AXUIElement) -> AXUIElement? {
-        descendants(mainWindow, matching: { role($0) == kAXTableRole as String }).first
+        guard hasSelectedChatsNavigation(in: mainWindow) else { return nil }
+
+        // KakaoTalk's chat list is a direct table child of a direct scroll-area
+        // child of the main window. Do not accept an arbitrary descendant table
+        // from Contacts, search results, settings, or a transient panel.
+        let candidates = children(mainWindow)
+            .filter { role($0) == kAXScrollAreaRole as String }
+            .flatMap(children)
+            .filter { table in
+                guard role(table) == kAXTableRole as String else { return false }
+                let tableRows = rows(in: table)
+                guard !tableRows.isEmpty else { return false }
+                return tableRows.contains { exactName(in: $0) != nil || isSelfRow($0) }
+            }
+        guard candidates.count == 1 else { return nil }
+        return candidates[0]
     }
 
     static func rows(in table: AXUIElement) -> [AXUIElement] {
@@ -109,5 +124,27 @@ enum AXHelpers {
         let selected = attribute(table, kAXSelectedRowsAttribute as String) as? [AXUIElement],
         selected.count == 1 else { return false }
         return CFEqual(selected[0], row)
+    }
+
+    static func isExactlySelected(_ row: AXUIElement, in table: AXUIElement) -> Bool {
+        guard let selected = attribute(table, kAXSelectedRowsAttribute as String) as? [AXUIElement],
+              selected.count == 1 else { return false }
+        return CFEqual(selected[0], row)
+    }
+
+    private static func hasSelectedChatsNavigation(in mainWindow: AXUIElement) -> Bool {
+        let matches = descendants(mainWindow) { element in
+            SendUIValidator.isSelectedChatsNavigation(
+                NavigationControlEvidence(
+                    role: role(element),
+                    identifier: identifier(element),
+                    title: title(element),
+                    description: description(element),
+                    selected: bool(element, kAXSelectedAttribute as String) == true
+                        || bool(element, kAXValueAttribute as String) == true
+                )
+            )
+        }
+        return matches.count == 1
     }
 }

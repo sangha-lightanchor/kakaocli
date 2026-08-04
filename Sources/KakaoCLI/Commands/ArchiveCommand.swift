@@ -28,7 +28,10 @@ struct ArchiveCommand: ParsableCommand {
     }
 
     struct Reconcile: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(commandName: "reconcile", abstract: "Run an allowlisted seven-day reconciliation now")
+        static let configuration = CommandConfiguration(
+            commandName: "reconcile",
+            abstract: "Run checkpointed allowlisted reconciliation now"
+        )
         @OptionGroup var database: DatabaseOptions
         mutating func run() async throws {
             try await liveClient(database).processArchiveNow()

@@ -36,11 +36,14 @@ struct SendCommand: AsyncParsableCommand {
             throw ValidationError("--request-id must be a UUID")
         }
         if let chatId, chatId <= 0 { throw ValidationError("--chat-id must be positive") }
-        let data = FileHandle.standardInput.readDataToEndOfFile()
+        let data = try readBoundedStdin(
+            maximumBytes: KakaoLimits.maximumSendBodyBytes,
+            label: "message stdin"
+        )
         guard let body = String(data: data, encoding: .utf8) else {
             throw ValidationError("stdin must be valid UTF-8")
         }
-        guard !body.isEmpty else { throw ValidationError("stdin is empty") }
+        try KakaoLimits.validateSendBody(body)
         let destination: SendDestination = selfChat
             ? .selfChat
             : .chatID(ChatID(rawValue: chatId!))

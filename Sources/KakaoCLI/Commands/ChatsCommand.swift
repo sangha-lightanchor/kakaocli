@@ -16,6 +16,8 @@ struct ChatsCommand: AsyncParsableCommand {
     @OptionGroup var database: DatabaseOptions
 
     mutating func run() async throws {
+        _ = try KakaoLimits.validatedResultLimit(limit, maximum: KakaoLimits.maximumChatResults)
+        try KakaoLimits.validateSearch(search)
         let chats: [Chat]
         let connection = serviceConnection()
         if !database.usesOverride, connection.isAvailable {

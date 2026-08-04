@@ -21,8 +21,9 @@ Homebrew system library.
   including database confirmation.
 - Never launch or activate KakaoTalk, raise a window, move the cursor, or post
   global keyboard/mouse input. Users may foreground KakaoTalk themselves.
-- Reject unrelated open rooms. Reuse one exact target room only when it has one
-  verified empty composer.
+- Reject every already-open room: a window title is not a stable chat identity.
+  Open only the one freshly verified destination row and require one empty
+  composer.
 - Resolve an ID through the database, then require exactly one matching UI row.
   Verify row selection, focus, the new room title, composer identity, body, and
   focus again before invoking a control.
@@ -30,8 +31,10 @@ Homebrew system library.
   be delivered only to KakaoTalk's PID after the exact composer remains focused.
 - Snapshot the intended chat's log-ID high-water mark before composing and
   confirm exact outgoing UTF-8 bytes only under that same chat ID.
-- Return `confirmed` or `unknown`. Persist both. Never automatically retry an
-  `unknown` result, and never reuse a request ID with different content.
+- Return `confirmed` or `unknown`. Persist both. Reusing the exact same request
+  ID may only reconcile the database and must never repeat the UI action. A
+  Kakao log ID may be claimed by at most one request ID. Never reuse a request
+  ID with different content.
 - Live tests are self-chat only. Never send a test to another person's room.
 
 `Tests/KakaoCoreTests/SafetySourceGuardTests.swift` prevents activation,
@@ -49,7 +52,9 @@ raising, cursor, global-event, and removed-option regressions.
   previews, photos, multi-photo, video, audio, files, stickers, and supported
   local paths.
 - Media retrieval is HTTPS-only. Verify reported byte count/checksum, compute
-  SHA-256, and deduplicate into content-addressed storage.
+  SHA-256, enforce approved-host, redirect, size, local-path, and free-space
+  policy, and deduplicate into content-addressed storage. Ordinary links and
+  previews are metadata-only.
 - Retain metadata on expiration, verification failure, or low disk. Never
   delete retained messages/media automatically.
 - Webhooks remain disabled until freshly configured. Payloads may contain text,
@@ -64,3 +69,8 @@ raising, cursor, global-event, and removed-option regressions.
 
 Machine-specific IDs, database keys, state keys, and webhook secrets stay
 local and uncommitted.
+
+Normal source-database resolution caches only a mode-0600 path and user ID and
+derives the SQLCipher key in memory. It never reads or writes a source key in
+Keychain. State-key reads must be noninteractive and fail closed rather than
+opening a permission dialog or replacing an inaccessible key.

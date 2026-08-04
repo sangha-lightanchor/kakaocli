@@ -26,13 +26,8 @@ public final class SafeSendCoordinator: @unchecked Sendable {
     }
 
     public func send(_ request: SendRequest) throws -> SendReceipt {
+        try KakaoLimits.validateSendBody(request.body)
         let bodyData = Data(request.body.utf8)
-        guard !bodyData.isEmpty else {
-            throw KakaoClientError.invalidRequest("Message body cannot be empty")
-        }
-        guard !bodyData.contains(0) else {
-            throw KakaoClientError.invalidRequest("Message body cannot contain NUL bytes")
-        }
         let bodyHash = SHA256.hash(data: bodyData).map { String(format: "%02x", $0) }.joined()
 
         try transactionLock.lock()
@@ -42,6 +37,29 @@ public final class SafeSendCoordinator: @unchecked Sendable {
             guard stored.destinationKey == request.destination.storageKey,
                   stored.bodySHA256 == bodyHash else {
                 throw KakaoClientError.requestIDConflict(request.requestID)
+            }
+            if stored.receipt.status == .unknown,
+               let storedBody = stored.body,
+               let storedHighWatermark = stored.highWatermark,
+               let logID = try database.confirmedOutgoing(
+                   chatID: stored.receipt.chatID,
+                   body: storedBody,
+                   after: storedHighWatermark
+               ) {
+                let confirmed = SendReceipt(
+                    requestID: request.requestID,
+                    chatID: stored.receipt.chatID,
+                    logID: logID,
+                    status: .confirmed
+                )
+                let claimed = try state.claimConfirmedSendAttempt(
+                    destinationKey: stored.destinationKey,
+                    bodySHA256: stored.bodySHA256,
+                    body: storedBody,
+                    highWatermark: storedHighWatermark,
+                    receipt: confirmed
+                )
+                return claimed ? confirmed : stored.receipt
             }
             return stored.receipt
         }
@@ -62,6 +80,11 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         guard chat.displayName != "(unknown)" else {
             throw KakaoClientError.uiPrecondition("Chat ID \(chat.id) has no provable UI identity")
         }
+        guard try database.chatUIIdentityCount(displayName: chat.displayName) == 1 else {
+            throw KakaoClientError.uiPrecondition(
+                "Chat ID \(chat.id) does not have a database-unique UI identity"
+            )
+        }
 
         let highWatermark = try database.maxLogID(chatID: chat.id)
         let provisional = SendReceipt(
@@ -76,6 +99,8 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         try state.saveSendAttempt(
             destinationKey: request.destination.storageKey,
             bodySHA256: bodyHash,
+            body: bodyData,
+            highWatermark: highWatermark,
             receipt: provisional
         )
         do {
@@ -88,7 +113,10 @@ public final class SafeSendCoordinator: @unchecked Sendable {
                 try state.removeSendAttempt(requestID: request.requestID)
                 throw KakaoClientError.uiPrecondition(message)
             case .outcomeUnknown:
-                return provisional
+                // Invoking the UI control may have succeeded even when the AX
+                // call could not acknowledge it. Confirmation is read-only and
+                // must still run; it never retries the UI action.
+                break
             }
         } catch {
             throw error
@@ -106,12 +134,16 @@ public final class SafeSendCoordinator: @unchecked Sendable {
                     logID: logID,
                     status: .confirmed
                 )
-                try state.saveSendAttempt(
+                let claimed = try state.claimConfirmedSendAttempt(
                     destinationKey: request.destination.storageKey,
                     bodySHA256: bodyHash,
+                    body: bodyData,
+                    highWatermark: highWatermark,
                     receipt: receipt
                 )
-                return receipt
+                // Another request ID already owning this exact log row makes
+                // attribution ambiguous. Never claim it and never retry UI.
+                return claimed ? receipt : provisional
             }
             if attempt + 1 < confirmationAttempts, confirmationDelay > 0 {
                 Thread.sleep(forTimeInterval: confirmationDelay)

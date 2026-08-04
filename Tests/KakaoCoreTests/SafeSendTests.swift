@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import KakaoCore
@@ -14,12 +15,47 @@ struct SafeSendTests {
         unreadCount: 0
     )
 
+    @Test("recognizes only selected structural Chats navigation controls")
+    func chatsNavigation() {
+        #expect(SendUIValidator.isSelectedChatsNavigation(
+            NavigationControlEvidence(
+                role: "AXCheckBox", identifier: "chatrooms",
+                title: nil, description: nil, selected: true
+            )
+        ))
+        #expect(!SendUIValidator.isSelectedChatsNavigation(
+            NavigationControlEvidence(
+                role: "AXCheckBox", identifier: "chatrooms",
+                title: nil, description: nil, selected: false
+            )
+        ))
+        #expect(!SendUIValidator.isSelectedChatsNavigation(
+            NavigationControlEvidence(
+                role: "AXCheckBox", identifier: "friends",
+                title: "Chats", description: nil, selected: true
+            )
+        ))
+        #expect(SendUIValidator.isSelectedChatsNavigation(
+            NavigationControlEvidence(
+                role: "AXButton", identifier: nil,
+                title: "Chats", description: nil, selected: true
+            )
+        ))
+    }
+
     @Test("rejects stale or unrelated windows")
     func staleWindows() throws {
         #expect(throws: SendUIError.self) {
             try SendUIValidator.preparation(
                 expectedTitle: "Exact Room",
                 openRooms: [OpenRoomEvidence(title: "Other Room", composerCount: 1, composerText: "")],
+                matchingRowCount: 1
+            )
+        }
+        #expect(throws: SendUIError.self) {
+            try SendUIValidator.preparation(
+                expectedTitle: "Exact Room",
+                openRooms: [OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: "")],
                 matchingRowCount: 1
             )
         }
@@ -64,6 +100,61 @@ struct SafeSendTests {
         }
     }
 
+    @Test("final action validation rejects focus, title, window, and composer changes")
+    func finalActionChanges() throws {
+        let valid = FinalRoomEvidence(
+            applicationRunning: true,
+            exactWindowSet: true,
+            mainWindowIdentifier: "Main Window",
+            roomTitle: "Exact Room",
+            composerCount: 1,
+            composerIdentityMatches: true,
+            composerFocused: true,
+            composerBody: "exact body"
+        )
+        try SendUIValidator.verifyFinalRoom(
+            expectedTitle: "Exact Room",
+            expectedBody: "exact body",
+            evidence: valid
+        )
+
+        let changed = [
+            FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: false,
+                mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
+                composerCount: 1, composerIdentityMatches: true,
+                composerFocused: true, composerBody: "exact body"
+            ),
+            FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: true,
+                mainWindowIdentifier: "Main Window", roomTitle: "Wrong Room",
+                composerCount: 1, composerIdentityMatches: true,
+                composerFocused: true, composerBody: "exact body"
+            ),
+            FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: true,
+                mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
+                composerCount: 1, composerIdentityMatches: true,
+                composerFocused: false, composerBody: "exact body"
+            ),
+            FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: true,
+                mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
+                composerCount: 1, composerIdentityMatches: false,
+                composerFocused: true, composerBody: "changed"
+            ),
+        ]
+        for evidence in changed {
+            #expect(throws: SendUIError.self) {
+                try SendUIValidator.verifyFinalRoom(
+                    expectedTitle: "Exact Room",
+                    expectedBody: "exact body",
+                    evidence: evidence
+                )
+            }
+        }
+    }
+
     @Test("confirms exact bytes only in intended chat")
     func exactDatabaseConfirmation() throws {
         let database = MockDatabase(chat: target)
@@ -92,7 +183,7 @@ struct SafeSendTests {
         #expect(ui.calls == 1)
     }
 
-    @Test("an unknown outcome is durable and never retried")
+    @Test("an unknown outcome is durable and never retries the UI")
     func unknownIdempotency() throws {
         let database = MockDatabase(chat: target)
         let state = MockState()
@@ -111,7 +202,79 @@ struct SafeSendTests {
         #expect(first.status == .unknown)
         #expect(second == first)
         #expect(ui.calls == 1)
-        #expect(database.confirmationCalls == 1)
+        #expect(database.confirmationCalls == 2)
+    }
+
+    @Test("a stored unknown can be confirmed later without another UI action")
+    func lateConfirmation() throws {
+        let database = MockDatabase(chat: target)
+        let state = MockState()
+        let ui = MockUI()
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "arrives later")
+        #expect(try coordinator.send(request).status == .unknown)
+        database.confirmedLogID = 104
+        let reconciled = try coordinator.send(request)
+        #expect(reconciled.status == .confirmed)
+        #expect(reconciled.logID == 104)
+        #expect(ui.calls == 1)
+    }
+
+    @Test("a stored unknown cannot claim a log owned by another request ID")
+    func lateConfirmationDoesNotStealLog() throws {
+        let database = MockDatabase(chat: target)
+        let state = MockState()
+        let ui = MockUI()
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let first = SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "same body")
+        #expect(try coordinator.send(first).status == .unknown)
+
+        let secondID = UUID()
+        let body = Data(first.body.utf8)
+        try state.saveSendAttempt(
+            destinationKey: first.destination.storageKey,
+            bodySHA256: SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined(),
+            body: body,
+            highWatermark: 8,
+            receipt: SendReceipt(
+                requestID: secondID,
+                chatID: target.id,
+                logID: nil,
+                status: .unknown
+            )
+        )
+        #expect(try state.claimConfirmedSendAttempt(
+            destinationKey: first.destination.storageKey,
+            bodySHA256: SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined(),
+            body: body,
+            highWatermark: 8,
+            receipt: SendReceipt(
+                requestID: secondID,
+                chatID: target.id,
+                logID: 104,
+                status: .confirmed
+            )
+        ))
+
+        database.confirmedLogID = 104
+        let replay = try coordinator.send(first)
+        #expect(replay.status == .unknown)
+        #expect(replay.logID == nil)
+        #expect(ui.calls == 1)
     }
 
     @Test("uncertainty from the UI is stored as unknown")
@@ -132,7 +295,51 @@ struct SafeSendTests {
             SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "maybe")
         )
         #expect(receipt.status == .unknown)
-        #expect(database.confirmationCalls == 0)
+        #expect(database.confirmationCalls == 1)
+    }
+
+    @Test("uncertainty from the UI still receives read-only database confirmation")
+    func uiUncertaintyConfirmed() throws {
+        let database = MockDatabase(chat: target)
+        database.confirmedLogID = 103
+        let state = MockState()
+        let ui = MockUI()
+        ui.error = .outcomeUnknown("AX acknowledgement unavailable")
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let receipt = try coordinator.send(
+            SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "confirm-only")
+        )
+        #expect(receipt.status == .confirmed)
+        #expect(receipt.logID == 103)
+        #expect(ui.calls == 1)
+    }
+
+    @Test("rejects a display identity shared by multiple database chats")
+    func duplicateDatabaseIdentity() throws {
+        let database = MockDatabase(chat: target)
+        database.uiIdentityCount = 2
+        let ui = MockUI()
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: MockState(),
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        #expect(throws: KakaoClientError.self) {
+            try coordinator.send(
+                SendRequest(requestID: UUID(), destination: .chatID(target.id), body: "ambiguous")
+            )
+        }
+        #expect(ui.calls == 0)
     }
 
     @Test("request is reserved before UI action and confirmed receipts replace the reservation")
@@ -156,7 +363,10 @@ struct SafeSendTests {
         )
         let receipt = try coordinator.send(request)
         #expect(receipt.status == .confirmed)
-        #expect(try state.sendAttempt(requestID: request.requestID)?.receipt == receipt)
+        let stored = try state.sendAttempt(requestID: request.requestID)
+        #expect(stored?.receipt == receipt)
+        #expect(stored?.body == Data(request.body.utf8))
+        #expect(stored?.highWatermark == 8)
     }
 
     @Test("precondition failure clears the reservation for a same-ID retry")
@@ -200,6 +410,76 @@ struct SafeSendTests {
             try coordinator.send(SendRequest(requestID: id, destination: .chatID(target.id), body: "second"))
         }
     }
+
+    @Test("rejects an oversized body before UI work")
+    func oversizedBody() throws {
+        let ui = MockUI()
+        let coordinator = SafeSendCoordinator(
+            database: MockDatabase(chat: target),
+            state: MockState(),
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let body = String(repeating: "a", count: KakaoLimits.maximumSendBodyBytes + 1)
+        #expect(throws: KakaoClientError.self) {
+            try coordinator.send(
+                SendRequest(requestID: UUID(), destination: .chatID(target.id), body: body)
+            )
+        }
+        #expect(ui.calls == 0)
+    }
+
+    @Test("chat-ID resolution bypasses previously listed display data")
+    func freshChatIdentity() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("KakaoTalk.sqlite").path
+        try runSQLite(path: path, sql: """
+            CREATE TABLE NTChatContext(userId INTEGER);
+            CREATE TABLE NTUser(
+                userId INTEGER, linkId INTEGER, displayName TEXT,
+                friendNickName TEXT, nickName TEXT
+            );
+            CREATE TABLE NTChatRoom(
+                chatId INTEGER, type INTEGER, chatName TEXT,
+                activeMembersCount INTEGER, lastLogId INTEGER,
+                lastUpdatedAt INTEGER, countOfNewMessage INTEGER,
+                directChatMemberUserId INTEGER, displayMemberIds BLOB
+            );
+            CREATE TABLE NTChatMeta(
+                chatId INTEGER, type INTEGER, groupNickname TEXT, content TEXT
+            );
+            INSERT INTO NTChatContext VALUES(999);
+            INSERT INTO NTUser VALUES(999, 0, 'Owner', NULL, NULL);
+            INSERT INTO NTChatRoom VALUES(123, 0, 'Old Name', 2, 8, 1, 0, NULL, NULL);
+            """)
+        let reader = DatabaseReader(databasePath: path)
+        try reader.open()
+        defer { reader.close() }
+        #expect(try reader.chats(limit: 50).first?.displayName == "Old Name")
+        try runSQLite(path: path, sql: "UPDATE NTChatRoom SET chatName = 'Fresh Name' WHERE chatId = 123;")
+        #expect(try reader.chat(id: target.id)?.displayName == "Fresh Name")
+    }
+
+    private func runSQLite(path: String, sql: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [path, sql]
+        let error = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = error
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw KakaoClientError.state(
+                String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            )
+        }
+    }
 }
 
 private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
@@ -209,11 +489,13 @@ private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
     var confirmationBody: Data?
     var confirmationAfter: Int64?
     var confirmationCalls = 0
+    var uiIdentityCount = 1
 
     init(chat: Chat) { target = chat }
     func chats(limit: Int) throws -> [Chat] { [target] }
     func chat(id: ChatID) throws -> Chat? { id == target.id ? target : nil }
     func selfChat() throws -> Chat? { target.isSelfChat ? target : nil }
+    func chatUIIdentityCount(displayName: String) throws -> Int { uiIdentityCount }
     func messages(chatID: ChatID?, since: Date?, limit: Int) throws -> [Message] { [] }
     func maxLogID(chatID: ChatID?) throws -> Int64 { 8 }
     func messagesSince(logID: Int64, limit: Int) throws -> [Message] { [] }
@@ -228,16 +510,60 @@ private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
 }
 
 private final class MockState: SendStateStoring, @unchecked Sendable {
+    private let lock = NSLock()
     private var attempts: [UUID: StoredSendAttempt] = [:]
-    func sendAttempt(requestID: UUID) throws -> StoredSendAttempt? { attempts[requestID] }
-    func saveSendAttempt(destinationKey: String, bodySHA256: String, receipt: SendReceipt) throws {
+    private var logOwners: [Int64: UUID] = [:]
+    func sendAttempt(requestID: UUID) throws -> StoredSendAttempt? {
+        lock.lock()
+        defer { lock.unlock() }
+        return attempts[requestID]
+    }
+    func saveSendAttempt(
+        destinationKey: String,
+        bodySHA256: String,
+        body: Data,
+        highWatermark: Int64,
+        receipt: SendReceipt
+    ) throws {
+        lock.lock()
+        defer { lock.unlock() }
         attempts[receipt.requestID] = StoredSendAttempt(
             destinationKey: destinationKey,
             bodySHA256: bodySHA256,
+            body: body,
+            highWatermark: highWatermark,
             receipt: receipt
         )
     }
-    func removeSendAttempt(requestID: UUID) throws { attempts.removeValue(forKey: requestID) }
+    func claimConfirmedSendAttempt(
+        destinationKey: String,
+        bodySHA256: String,
+        body: Data,
+        highWatermark: Int64,
+        receipt: SendReceipt
+    ) throws -> Bool {
+        guard let logID = receipt.logID else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        if let owner = logOwners[logID], owner != receipt.requestID { return false }
+        guard let stored = attempts[receipt.requestID],
+              stored.destinationKey == destinationKey,
+              stored.bodySHA256 == bodySHA256 else { return false }
+        logOwners[logID] = receipt.requestID
+        attempts[receipt.requestID] = StoredSendAttempt(
+            destinationKey: destinationKey,
+            bodySHA256: bodySHA256,
+            body: body,
+            highWatermark: highWatermark,
+            receipt: receipt
+        )
+        return true
+    }
+    func removeSendAttempt(requestID: UUID) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        attempts.removeValue(forKey: requestID)
+    }
 }
 
 private final class MockUI: KakaoSendUI, @unchecked Sendable {

@@ -25,11 +25,17 @@ printf '%s' 'self-chat test' | \
 
 Treat `confirmed` as delivered only after its `log_id` is present. Treat
 `unknown` as possibly delivered: never retry it automatically or with a new
-request ID. Inspect the exact chat first.
+request ID. Repeating the exact request with the same request ID performs
+read-only reconciliation and never invokes another UI action.
 
 Never try to make KakaoTalk visible through automation. If kakaocli reports
 that the app or main window is unavailable, ask the user to foreground it
 manually and leave the window rendered.
+
+If local database identity has not been cached, run `kakaocli auth --refresh`
+once. Normal reads never request the Kakao SQLCipher key from Keychain. Do not
+work around Keychain prompts by broadening partition lists or access for other
+applications.
 
 Archive access is explicit:
 

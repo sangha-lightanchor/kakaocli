@@ -4,6 +4,14 @@ set -euo pipefail
 repo_dir="${0:A:h:h}"
 cd "$repo_dir"
 
+required_commands=(swift git rg nm otool xcrun stat)
+for required_command in "${required_commands[@]}"; do
+  if ! command -v "$required_command" >/dev/null 2>&1; then
+    print -u2 "required release tool is missing: $required_command"
+    exit 1
+  fi
+done
+
 swift test
 swift build -c release
 git diff --check
@@ -19,8 +27,29 @@ if rg -n --fixed-strings --glob '*.swift' \
   exit 1
 fi
 
+if rg -n --fixed-strings --glob '*.swift' \
+  -e '/usr/bin/security' \
+  -e 'find-generic-password' \
+  -e 'com.kakaocli.sqlcipher' Sources; then
+  print -u2 'prompt-capable or persistent source-database Keychain access found'
+  exit 1
+fi
+if ! rg -q --fixed-strings 'interactionNotAllowed = true' Sources/KakaoCore/StateKeyStore.swift; then
+  print -u2 'state-key lookup is not explicitly noninteractive'
+  exit 1
+fi
+
 if nm -u .build/release/kakaocli | rg '_CGEventPost$|_CGWarpMouseCursorPosition'; then
   print -u2 'global event or cursor symbol found in release binary'
+  exit 1
+fi
+
+if .build/release/kakaocli send --help | rg -n -- '--key([ ,>]|$)'; then
+  print -u2 'database key must not be accepted through argv'
+  exit 1
+fi
+if ! .build/release/kakaocli auth --help | rg -q -- '--key-stdin'; then
+  print -u2 'safe stdin database-key setup command is missing'
   exit 1
 fi
 
@@ -39,6 +68,9 @@ if [[ -n "${PROHIBITED_PRODUCT_NAME:-}" ]]; then
     print -u2 'prohibited product reference found in an active surface'
     exit 1
   fi
+elif [[ "${REQUIRE_PROHIBITED_PRODUCT_SCAN:-0}" == 1 ]]; then
+  print -u2 'PROHIBITED_PRODUCT_NAME is required for this release gate'
+  exit 1
 fi
 
 binary_bytes="$(stat -f '%z' .build/release/kakaocli)"
@@ -47,4 +79,36 @@ if (( binary_bytes >= 5 * 1024 * 1024 )); then
   exit 1
 fi
 
-print "release checks passed; binary_bytes=$binary_bytes"
+sqlcipher_path="$(otool -L .build/release/kakaocli | awk '/sqlcipher/{print $1; exit}')"
+if [[ -z "$sqlcipher_path" ]]; then
+  print -u2 'release binary is not linked to SQLCipher'
+  exit 1
+fi
+
+sqlcipher_minos='unknown'
+if [[ -e "$sqlcipher_path" ]]; then
+  sqlcipher_minos="$(xcrun vtool -show-build "$sqlcipher_path" 2>/dev/null | awk '/minos/{print $2; exit}')"
+  [[ -n "$sqlcipher_minos" ]] || sqlcipher_minos='unknown'
+fi
+target_minos="$(sed -nE 's/.*\.macOS\(\.v([0-9]+)\).*/\1.0/p' Package.swift | head -1)"
+[[ -n "$target_minos" ]] || target_minos='unknown'
+
+portable=true
+if [[ "$sqlcipher_path" == /* ]]; then
+  portable=false
+  print -u2 "source-build diagnostic: SQLCipher uses an absolute install path: $sqlcipher_path"
+fi
+if [[ "$sqlcipher_minos" != unknown && "$target_minos" != unknown ]]; then
+  autoload -Uz is-at-least
+  if ! is-at-least "$sqlcipher_minos" "$target_minos"; then
+    portable=false
+    print -u2 "source-build diagnostic: SQLCipher minOS $sqlcipher_minos exceeds package minOS $target_minos"
+  fi
+fi
+
+if [[ "${KAKAOCLI_BINARY_RELEASE:-0}" == 1 && "$portable" != true ]]; then
+  print -u2 'refusing a non-portable binary release; publish source-only or bundle a compatible @rpath SQLCipher'
+  exit 1
+fi
+
+print "release checks passed; binary_bytes=$binary_bytes sqlcipher_path=$sqlcipher_path sqlcipher_minos=$sqlcipher_minos portable=$portable"

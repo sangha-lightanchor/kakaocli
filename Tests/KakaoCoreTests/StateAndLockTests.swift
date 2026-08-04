@@ -19,14 +19,82 @@ struct StateAndLockTests {
         )
         do {
             let state = try StateStore(path: path, key: key, archiveRoot: root.path)
-            try state.saveSendAttempt(destinationKey: "chat:7", bodySHA256: "hash", receipt: receipt)
+            try state.saveSendAttempt(
+                destinationKey: "chat:7",
+                bodySHA256: "hash",
+                body: Data("body".utf8),
+                highWatermark: 6,
+                receipt: receipt
+            )
             state.close()
         }
         let header = try Data(contentsOf: URL(fileURLWithPath: path)).prefix(16)
         #expect(String(data: header, encoding: .utf8) != "SQLite format 3\0")
         let reopened = try StateStore(path: path, key: key, archiveRoot: root.path)
         defer { reopened.close() }
-        #expect(try reopened.sendAttempt(requestID: requestID)?.receipt == receipt)
+        let stored = try reopened.sendAttempt(requestID: requestID)
+        #expect(stored?.receipt == receipt)
+        #expect(stored?.body == Data("body".utf8))
+        #expect(stored?.highWatermark == 6)
+    }
+
+    @Test("one confirmed log row is durably owned by one request ID")
+    func uniqueConfirmedLogOwner() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("state.sqlite3").path
+        let key = String(repeating: "d", count: 64)
+        let firstID = UUID()
+        let secondID = UUID()
+        let body = Data("same body".utf8)
+
+        do {
+            let state = try StateStore(path: path, key: key, archiveRoot: root.path)
+            for requestID in [firstID, secondID] {
+                try state.saveSendAttempt(
+                    destinationKey: "chat:7",
+                    bodySHA256: "same-hash",
+                    body: body,
+                    highWatermark: 6,
+                    receipt: SendReceipt(
+                        requestID: requestID,
+                        chatID: ChatID(rawValue: 7),
+                        logID: nil,
+                        status: .unknown
+                    )
+                )
+            }
+            #expect(try state.claimConfirmedSendAttempt(
+                destinationKey: "chat:7",
+                bodySHA256: "same-hash",
+                body: body,
+                highWatermark: 6,
+                receipt: SendReceipt(
+                    requestID: firstID,
+                    chatID: ChatID(rawValue: 7),
+                    logID: 99,
+                    status: .confirmed
+                )
+            ))
+            state.close()
+        }
+
+        let reopened = try StateStore(path: path, key: key, archiveRoot: root.path)
+        defer { reopened.close() }
+        #expect(try !reopened.claimConfirmedSendAttempt(
+            destinationKey: "chat:7",
+            bodySHA256: "same-hash",
+            body: body,
+            highWatermark: 6,
+            receipt: SendReceipt(
+                requestID: secondID,
+                chatID: ChatID(rawValue: 7),
+                logID: 99,
+                status: .confirmed
+            )
+        ))
+        #expect(try reopened.sendAttempt(requestID: firstID)?.receipt.logID == 99)
+        #expect(try reopened.sendAttempt(requestID: secondID)?.receipt.status == .unknown)
     }
 
     @Test("flock excludes another process for the whole transaction")
@@ -39,6 +107,46 @@ struct StateAndLockTests {
         #expect(try pythonCanLock(path: path) == false)
         lock.unlock()
         #expect(try pythonCanLock(path: path) == true)
+    }
+
+    @Test("one lock instance serializes concurrent in-process callers")
+    func inProcessLock() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lock = SendTransactionLock(path: root.appendingPathComponent("send.lock").path)
+        let firstAcquired = DispatchSemaphore(value: 0)
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let secondAcquired = DispatchSemaphore(value: 0)
+
+        DispatchQueue.global().async {
+            guard (try? lock.lock()) != nil else { return }
+            firstAcquired.signal()
+            releaseFirst.wait()
+            lock.unlock()
+        }
+        #expect(firstAcquired.wait(timeout: .now() + 1) == .success)
+
+        DispatchQueue.global().async {
+            guard (try? lock.lock()) != nil else { return }
+            secondAcquired.signal()
+            lock.unlock()
+        }
+        #expect(secondAcquired.wait(timeout: .now() + 0.1) == .timedOut)
+        releaseFirst.signal()
+        #expect(secondAcquired.wait(timeout: .now() + 1) == .success)
+    }
+
+    @Test("send lock rejects symbolic-link targets")
+    func lockSymlink() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("unrelated")
+        #expect(FileManager.default.createFile(atPath: target.path, contents: Data("keep".utf8)))
+        let path = root.appendingPathComponent("send.lock")
+        try FileManager.default.createSymbolicLink(at: path, withDestinationURL: target)
+        let lock = SendTransactionLock(path: path.path)
+        #expect(throws: KakaoClientError.self) { try lock.lock() }
+        #expect(try Data(contentsOf: target) == Data("keep".utf8))
     }
 
     @Test("legacy import is idempotent and skips pending outbox")
@@ -74,7 +182,8 @@ struct StateAndLockTests {
         #expect(second.messagesImported == 1)
         #expect(try state.archiveStatus().messageCount == 1)
         #expect(try state.archiveStatus().pendingWebhookCount == 0)
-        #expect(try state.allowedChats() == Set([ChatID(rawValue: 22)]))
+        #expect(first.allowedChatsImported == 0)
+        #expect(try state.allowedChats().isEmpty)
     }
 
     private func temporaryDirectory() -> URL {

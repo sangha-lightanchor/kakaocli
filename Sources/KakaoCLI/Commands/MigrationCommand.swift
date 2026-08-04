@@ -27,7 +27,7 @@ struct MigrationCommand: ParsableCommand {
         mutating func run() throws {
             let paths = RuntimePaths()
             try paths.prepare()
-            let sourceConfiguration = try DatabaseLocator.resolve(databasePath: database.db, key: database.key)
+            let sourceConfiguration = try DatabaseLocator.resolve(databasePath: database.db)
             let source = DatabaseReader(databasePath: sourceConfiguration.path)
             try source.open(key: sourceConfiguration.key)
             defer { source.close() }

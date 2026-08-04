@@ -20,6 +20,8 @@ struct MessagesCommand: AsyncParsableCommand {
     @OptionGroup var database: DatabaseOptions
 
     mutating func run() async throws {
+        if let chatId, chatId <= 0 { throw ValidationError("--chat-id must be positive") }
+        _ = try KakaoLimits.validatedResultLimit(limit, maximum: KakaoLimits.maximumMessageResults)
         let id = chatId.map { ChatID(rawValue: $0) }
         let date = parseDuration(since)
         if since != nil, date == nil {

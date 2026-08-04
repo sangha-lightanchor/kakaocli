@@ -5,6 +5,7 @@ public protocol KakaoDatabaseAccess: AnyObject, Sendable {
     func chats(limit: Int) throws -> [Chat]
     func chat(id: ChatID) throws -> Chat?
     func selfChat() throws -> Chat?
+    func chatUIIdentityCount(displayName: String) throws -> Int
     func messages(chatID: ChatID?, since: Date?, limit: Int) throws -> [Message]
     func maxLogID(chatID: ChatID?) throws -> Int64
     func messagesSince(logID: Int64, limit: Int) throws -> [Message]
@@ -16,7 +17,6 @@ public protocol KakaoDatabaseAccess: AnyObject, Sendable {
 /// Callers serialize access through `KakaoClient`.
 public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
     private var db: OpaquePointer?
-    private var chatIndex: [ChatID: Chat] = [:]
     public let databasePath: String
 
     public init(databasePath: String) {
@@ -79,7 +79,29 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
     }
 
     public func chats(limit: Int = 50) throws -> [Chat] {
+        try loadChats(limit: max(1, limit), chatID: nil)
+    }
+
+    /// Resolve an irreversible send decision from the source database itself.
+    /// A previously listed chat is never trusted as a security identity.
+    public func chat(id: ChatID) throws -> Chat? {
+        try loadChats(limit: nil, chatID: id).first
+    }
+
+    public func selfChat() throws -> Chat? {
+        try loadChats(limit: nil, chatID: nil).first(where: \.isSelfChat)
+    }
+
+    /// KakaoTalk's Accessibility tree exposes a display label, not the numeric
+    /// chat ID. Fail closed unless that exact label maps to one database chat.
+    public func chatUIIdentityCount(displayName: String) throws -> Int {
+        try loadChats(limit: nil, chatID: nil).count { $0.displayName == displayName }
+    }
+
+    private func loadChats(limit: Int?, chatID: ChatID?) throws -> [Chat] {
         let selfDisplayName = try currentUserDisplayName()
+        let whereClause = chatID == nil ? "" : "WHERE r.chatId = ?"
+        let limitClause = limit == nil ? "" : "LIMIT ?"
         let sql = """
             SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                    r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
@@ -91,16 +113,21 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
                    r.displayMemberIds
             FROM NTChatRoom r
             LEFT JOIN NTUser u ON r.directChatMemberUserId = u.userId AND u.linkId = 0
+            \(whereClause)
             ORDER BY r.lastUpdatedAt DESC
-            LIMIT ?
+            \(limitClause)
             """
+
+        var bindings: [SQLValue] = []
+        if let chatID { bindings.append(.int64(chatID.rawValue)) }
+        if let limit { bindings.append(.int(max(1, limit))) }
 
         struct Record {
             let chat: Chat
             let memberIDs: [Int64]
         }
 
-        let records: [Record] = try query(sql, bindings: [.int(max(1, limit))]) { row in
+        let records: [Record] = try query(sql, bindings: bindings) { row in
             let rawType = row.int(1)
             let type = Chat.ChatType.from(rawInt: rawType)
             let explicitName = [row.string(2), row.string(10), row.string(11)]
@@ -152,19 +179,7 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
                 isSelfChat: record.chat.isSelfChat
             )
         }
-        chatIndex.removeAll(keepingCapacity: true)
-        for chat in resolved { chatIndex[chat.id] = chat }
         return resolved
-    }
-
-    public func chat(id: ChatID) throws -> Chat? {
-        if let cached = chatIndex[id] { return cached }
-        return try chats(limit: 1_000_000).first { $0.id == id }
-    }
-
-    public func selfChat() throws -> Chat? {
-        if let cached = chatIndex.values.first(where: \.isSelfChat) { return cached }
-        return try chats(limit: 1_000_000).first(where: \.isSelfChat)
     }
 
     public func messages(
@@ -255,7 +270,11 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
     }
 
     public func myUserID() throws -> Int64 {
-        try query("SELECT userId FROM NTChatContext LIMIT 1", bindings: []) { $0.int64(0) }.first ?? 0
+        let values = try query("SELECT userId FROM NTChatContext LIMIT 2", bindings: []) { $0.int64(0) }
+        guard values.count == 1, let value = values.first, value > 0 else {
+            throw KakaoError.databaseOpenFailed("The current KakaoTalk user identity is ambiguous")
+        }
+        return value
     }
 
     public func schema() throws -> [(name: String, sql: String)] {

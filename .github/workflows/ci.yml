@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/v1-safe-local]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install build tools
+        run: brew install sqlcipher ripgrep
+      - name: Verify Swift package lock
+        run: swift package resolve && git diff --exit-code -- Package.resolved
+      - name: Run release checks
+        env:
+          PROHIBITED_PRODUCT_NAME: ${{ vars.PROHIBITED_PRODUCT_NAME }}
+        run: scripts/check-release.sh
+
+  binary-portability:
+    if: startsWith(github.ref, 'refs/tags/') && vars.PUBLISH_BINARY == 'true'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install sqlcipher ripgrep
+      - name: Refuse non-portable binary artifacts
+        env:
+          KAKAOCLI_BINARY_RELEASE: '1'
+          PROHIBITED_PRODUCT_NAME: ${{ vars.PROHIBITED_PRODUCT_NAME }}
+        run: scripts/check-release.sh

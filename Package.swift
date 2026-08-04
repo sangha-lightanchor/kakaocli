@@ -10,7 +10,7 @@ let package = Package(
         .library(name: "KakaoCore", targets: ["KakaoCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.7.0"),
     ],
     targets: [
         .executableTarget(
@@ -26,6 +26,7 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("LocalAuthentication"),
                 .linkedFramework("Security"),
             ]
         ),

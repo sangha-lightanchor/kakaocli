@@ -60,7 +60,9 @@ public actor KakaoClient {
     }
 
     public func listChats(search: String? = nil, limit: Int = 50) throws -> [Chat] {
-        let chats = try database.chats(limit: max(limit, 500))
+        let limit = try KakaoLimits.validatedResultLimit(limit, maximum: KakaoLimits.maximumChatResults)
+        try KakaoLimits.validateSearch(search)
+        let chats = try database.chats(limit: KakaoLimits.maximumChatResults)
         chatCache.removeAll(keepingCapacity: true)
         for chat in chats { chatCache[chat.id] = chat }
         let filtered: [Chat]
@@ -73,16 +75,18 @@ public actor KakaoClient {
     }
 
     public func messages(chatID: ChatID? = nil, since: Date? = nil, limit: Int = 50) throws -> [Message] {
-        try database.messages(chatID: chatID, since: since, limit: limit)
+        let limit = try KakaoLimits.validatedResultLimit(limit, maximum: KakaoLimits.maximumMessageResults)
+        return try database.messages(chatID: chatID, since: since, limit: limit)
     }
 
     public func send(_ request: SendRequest) throws -> SendReceipt {
-        try sender.send(request)
+        try KakaoLimits.validateSendBody(request.body)
+        return try sender.send(request)
     }
 
     public func events() -> AsyncThrowingStream<KakaoEvent, Error> {
         let id = UUID()
-        let stream = AsyncThrowingStream<KakaoEvent, Error> { continuation in
+        let stream = AsyncThrowingStream<KakaoEvent, Error>(bufferingPolicy: .bufferingNewest(1_000)) { continuation in
             continuations[id] = continuation
             continuation.onTermination = { [weak self] _ in
                 Task { await self?.removeContinuation(id) }
@@ -98,7 +102,7 @@ public actor KakaoClient {
 
     public func allow(chatID: ChatID) throws {
         guard try database.chat(id: chatID) != nil else { throw KakaoClientError.chatNotFound(chatID) }
-        try state.allow(chatID: chatID)
+        try state.allow(chatID: chatID, startingAfter: database.maxLogID(chatID: chatID))
     }
 
     public func disallow(chatID: ChatID) throws {
@@ -111,14 +115,11 @@ public actor KakaoClient {
 
     public func configureWebhook(url: URL?, bearerToken: String?) throws {
         if let url {
-            let scheme = url.scheme?.lowercased()
-            let loopback = ["localhost", "127.0.0.1", "::1"].contains(url.host?.lowercased() ?? "")
-            guard scheme == "https" || (scheme == "http" && loopback) else {
+            guard WebhookEndpointPolicy.permits(url) else {
                 throw KakaoClientError.invalidRequest("Webhook must use HTTPS (HTTP is allowed only on loopback)")
             }
         }
-        try state.setConfiguration(key: GenericWebhook.URLKey, value: url?.absoluteString)
-        try state.setConfiguration(key: GenericWebhook.bearerKey, value: bearerToken)
+        try state.configureWebhook(url: url?.absoluteString, bearerToken: bearerToken)
     }
 
     public func processArchiveNow() throws {
@@ -131,6 +132,7 @@ public actor KakaoClient {
         monitor.start { [weak self] reason in
             Task { await self?.databaseChanged(reason: reason) }
         }
+        Task { [weak self] in await self?.reconcileAfterStartup() }
     }
 
     private func databaseChanged(reason: DatabaseChangeReason) {
@@ -147,23 +149,35 @@ public actor KakaoClient {
             }
             if case .reconciliation = reason { try reconcileArchive() }
         } catch {
-            for continuation in continuations.values { continuation.finish(throwing: error) }
-            continuations.removeAll()
-            monitor.stop()
-            monitorStarted = false
+            // The 60-second backstop remains active. Durable checkpoints make
+            // the next event retry metadata that was not committed.
         }
     }
 
     private func reconcileArchive() throws {
-        let allowed = try state.allowedChats()
-        guard !allowed.isEmpty else { return }
-        let since = Date().addingTimeInterval(-7 * 24 * 60 * 60)
-        for chatID in allowed {
-            let messages = try database.messages(chatID: chatID, since: since, limit: 10_000)
-            for message in messages.reversed() { try archive.archive(message) }
+        var checkpoints = try state.archiveCheckpoints()
+        guard let minimum = checkpoints.values.min() else { return }
+        var cursor = minimum
+        while true {
+            let messages = try database.messagesSince(logID: cursor, limit: 500)
+            guard !messages.isEmpty else { break }
+            for message in messages {
+                cursor = max(cursor, message.id)
+                guard let checkpoint = checkpoints[message.chatId], message.id > checkpoint else { continue }
+                if try archive.archive(message) { checkpoints[message.chatId] = message.id }
+            }
+            if messages.count < 500 { break }
         }
+        archive.schedulePendingWork()
         let status = try state.archiveStatus()
         for continuation in continuations.values { continuation.yield(.archiveStatus(status)) }
+    }
+
+    private func reconcileAfterStartup() {
+        do { try reconcileArchive() }
+        catch {
+            // Filesystem events and the 60-second reconciliation timer retry.
+        }
     }
 
     private func removeContinuation(_ id: UUID) {

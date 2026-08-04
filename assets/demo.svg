@@ -54,33 +54,25 @@
   <text class="time" x="160" y="166">10:28</text>
   <text class="dim" x="220" y="166">1 member · self</text>
 
-  <!-- Command 2: search -->
+  <!-- Command 2: discover a stable chat ID -->
   <text class="prompt" x="16" y="206">$</text>
-  <text class="cmd" x="28" y="206">kakaocli search "점심"</text>
+  <text class="cmd" x="28" y="206">kakaocli chats --search "김지수" --json</text>
 
-  <text class="dim" x="16" y="230">Found 3 messages:</text>
+  <text class="dim" x="16" y="230">Resolve names only for discovery; save the exact chat_id:</text>
 
-  <text class="time" x="16" y="254">02/18</text>
-  <text class="chat-name" x="64" y="254">김지수:</text>
-  <text class="msg" x="128" y="254">내일</text>
-  <text class="search-hl" x="160" y="254">점심</text>
-  <text class="msg" x="192" y="254">같이 먹을래? 강남역 근처에서</text>
+  <text class="time" x="16" y="254">chat_id</text>
+  <text class="chat-name" x="88" y="254">123456</text>
+  <text class="msg" x="160" y="254">김지수</text>
 
-  <text class="time" x="16" y="274">02/15</text>
-  <text class="me" x="64" y="274">Me:</text>
-  <text class="msg" x="96" y="274">토요일</text>
-  <text class="search-hl" x="144" y="274">점심</text>
-  <text class="msg" x="176" y="274">약속 잡자!</text>
+  <text class="time" x="16" y="274">type</text>
+  <text class="msg" x="88" y="274">direct · 2 members</text>
 
-  <text class="time" x="16" y="294">02/10</text>
-  <text class="chat-name" x="64" y="294">이민호:</text>
-  <text class="msg" x="128" y="294">오늘</text>
-  <text class="search-hl" x="160" y="294">점심</text>
-  <text class="msg" x="192" y="294">뭐 먹었어?</text>
+  <text class="time" x="16" y="294">unread</text>
+  <text class="msg" x="88" y="294">0</text>
 
   <!-- Command 3: messages -->
   <text class="prompt" x="16" y="334">$</text>
-  <text class="cmd" x="28" y="334">kakaocli messages --chat "김지수" --since 1d</text>
+  <text class="cmd" x="28" y="334">kakaocli messages --chat-id 123456 --since 1d</text>
 
   <text class="time" x="16" y="358">09:15</text>
   <text class="chat-name" x="64" y="358">김지수:</text>
@@ -104,10 +96,10 @@
 
   <!-- Command 4: send -->
   <text class="prompt" x="16" y="478">$</text>
-  <text class="cmd" x="28" y="478">printf message | kakaocli send --chat-id 123 --request-id UUID</text>
+  <text class="cmd" x="28" y="478">printf message | kakaocli send --chat-id 123456 --stdin --request-id UUID</text>
 
-  <text class="dim" x="16" y="502">Opening chat: 김지수...</text>
-  <text class="dim" x="16" y="522">Message sent.</text>
+  <text class="dim" x="16" y="502">confirmed request_id=UUID chat_id=123456</text>
+  <text class="dim" x="16" y="522">log_id=3899575742885486593</text>
 
   <!-- Cursor -->
   <text class="prompt" x="16" y="548">$</text>

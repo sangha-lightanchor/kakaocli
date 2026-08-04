@@ -25,6 +25,7 @@ struct ConfigCommand: ParsableCommand {
         @Argument var chatID: Int64
         @OptionGroup var database: DatabaseOptions
         mutating func run() async throws {
+            guard chatID > 0 else { throw ValidationError("chat ID must be positive") }
             try await liveClient(database).disallow(chatID: ChatID(rawValue: chatID))
             print("Disallowed chat_id=\(chatID)")
         }
@@ -49,13 +50,31 @@ struct ConfigCommand: ParsableCommand {
         @OptionGroup var database: DatabaseOptions
         mutating func run() async throws {
             guard disable != (url != nil) else { throw ValidationError("Specify exactly one of --url or --disable") }
+            guard !disable || !bearerTokenStdin else {
+                throw ValidationError("--bearer-token-stdin cannot be used with --disable")
+            }
             let token: String?
             if bearerTokenStdin {
-                let data = FileHandle.standardInput.readDataToEndOfFile()
-                token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .newlines)
+                let data = try readBoundedStdin(
+                    maximumBytes: KakaoLimits.maximumSecretBytes,
+                    label: "bearer token"
+                )
+                guard let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .newlines) else {
+                    throw ValidationError("bearer token stdin must be UTF-8")
+                }
+                token = value
             } else { token = nil }
+            let parsedURL: URL?
+            if disable {
+                parsedURL = nil
+            } else {
+                guard let raw = url, let value = URL(string: raw), value.scheme != nil else {
+                    throw ValidationError("--url must be an absolute URL")
+                }
+                parsedURL = value
+            }
             try await liveClient(database).configureWebhook(
-                url: disable ? nil : URL(string: url!),
+                url: parsedURL,
                 bearerToken: token
             )
             print(disable ? "Webhook disabled" : "Webhook configured")

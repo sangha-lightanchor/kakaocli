@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.1 — Noninteractive database and runtime hardening
+
+- Removed the source SQLCipher key from Keychain, command arguments, and local
+  caches; normal reads derive it in memory from a mode-0600 path/user-ID cache.
+- Made encrypted state-key reads noninteractive and fail closed without
+  replacing an inaccessible key.
+- Rejected all already-open room windows, revalidated UI identity immediately
+  before action, and strengthened same-process and cross-process send locking.
+- Added durable late reconciliation for `unknown` receipts without a second UI
+  action, with exclusive confirmed-log claims across request IDs.
+- Hardened the optional service with a lifetime lock, same-user peer checks,
+  bounded framed I/O, deadlines, safe socket cleanup, and watcher rearming.
+- Added checkpointed archive catch-up, background leased media/outbox work,
+  approved-host streaming downloads, content-object verification, path-free
+  webhook DTOs, and redirect rejection.
+- Pinned dependencies, added CI/release guards, and made nonportable Homebrew
+  SQLCipher binary artifacts fail closed while retaining supported source
+  builds.
+
 ## 1.0.0 — Safe local rebuild
 
 - Added the concurrency-safe `KakaoClient` actor and stable send types.

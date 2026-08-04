@@ -126,7 +126,8 @@ kakaocli query "SELECT COUNT(*) FROM NTChatMessage"
 > [!TIP]
 > Sending accepts only an exact numeric chat ID or `--self`. A result is
 > `confirmed` only when the exact outgoing bytes appear under that chat ID in
-> the local database. Never automatically retry `unknown`.
+> the local database. Repeating the exact same request ID only reconciles the
+> database and never repeats the UI action. Never retry `unknown` with a new ID.
 
 ## Commands
 
@@ -157,10 +158,13 @@ printf '%s' 'message' | kakaocli send --self --request-id UUID --dry-run
 `send` never launches or activates KakaoTalk, raises a window, moves the cursor,
 or posts global input. KakaoTalk must already be running with its main window
 rendered. The command resolves the ID through the local database, requires one
-exact UI row, rejects unrelated rooms and drafts, verifies selection/focus/
-window title/composer identity, and uses one exact Send control or a focused-
-composer Return event delivered only to KakaoTalk's process. A cross-process
-lock covers the whole send and exact database-confirmation transaction.
+database-unique UI identity and one exact row in the structurally verified,
+selected Chats tab, rejects every already-open room and all drafts, verifies
+selection/focus/window title/composer/control identity immediately before the
+action, and uses one exact Send control or a focused-composer Return event
+delivered only to KakaoTalk's process. A same-process mutex and cross-process
+lock cover the whole resolution, UI, and exact database-confirmation
+transaction. Bodies are capped at 64 KiB of UTF-8.
 
 ### Sync / 동기화
 

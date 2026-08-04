@@ -26,12 +26,6 @@ struct SendCommand: ParsableCommand {
     @Flag(name: .long, help: "Validate without invoking KakaoTalk")
     var dryRun = false
 
-    @Option(name: .long, help: "Path to database file")
-    var db: String?
-
-    @Option(name: .long, help: "Database encryption key")
-    var key: String?
-
     func run() throws {
         guard (chatId != nil) != selfChat else {
             throw ValidationError("Specify exactly one of --chat-id or --self")
@@ -40,7 +34,21 @@ struct SendCommand: ParsableCommand {
             throw ValidationError("--request-id must be a UUID")
         }
         if let chatId, chatId <= 0 { throw ValidationError("--chat-id must be positive") }
-        let data = FileHandle.standardInput.readDataToEndOfFile()
+        var data = Data()
+        while data.count <= SafeSendClient.maximumBodyBytes {
+            let remaining = SafeSendClient.maximumBodyBytes + 1 - data.count
+            guard remaining > 0 else { break }
+            let chunk = try FileHandle.standardInput.read(
+                upToCount: min(8 * 1_024, remaining)
+            ) ?? Data()
+            guard !chunk.isEmpty else { break }
+            data.append(chunk)
+        }
+        guard data.count <= SafeSendClient.maximumBodyBytes else {
+            throw ValidationError(
+                "stdin exceeds \(SafeSendClient.maximumBodyBytes) UTF-8 bytes"
+            )
+        }
         guard let body = String(data: data, encoding: .utf8), !body.isEmpty else {
             throw ValidationError("stdin must contain valid, nonempty UTF-8")
         }
@@ -63,7 +71,9 @@ struct SendCommand: ParsableCommand {
             return
         }
 
-        let reader = try openDatabase(dbPath: db, key: key)
+        // The send command never accepts source-database keys in process
+        // arguments. Normal database access derives the key in memory.
+        let reader = try openDatabase(dbPath: nil, key: nil)
         defer { reader.close() }
         let receipt = try SafeSendClient(database: reader).send(
             SendRequest(requestID: requestUUID, destination: destination, body: body)

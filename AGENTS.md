@@ -37,15 +37,21 @@ The safe send path:
 
 - accepts only `--chat-id` or `--self`; names and substring matches are rejected;
 - serializes the whole transaction across threads and processes;
-- rejects duplicate UI rows, unrelated open rooms, nonempty drafts, ambiguous
-  composers, wrong window titles, and lost focus;
+- requires a database-unique display identity and the structurally verified,
+  selected Chats tab, and rejects duplicate UI rows, every already-open room,
+  nonempty drafts, ambiguous composers, wrong window titles, and lost focus;
 - never activates or raises KakaoTalk, moves the pointer, or posts global input;
 - submits only through one exact Accessibility Send control or a Return event
   targeted to KakaoTalk's PID while the verified composer remains focused;
 - confirms the exact UTF-8 bytes as a new outgoing row under the intended
   `chat_id` before returning `confirmed`;
 - records `unknown` durably when submission may have happened but confirmation
-  cannot prove it. Never retry an `unknown` request with a new request ID.
+  cannot prove it. Replaying the same request ID performs read-only database
+  reconciliation and may upgrade it to `confirmed`; it never repeats UI work.
+  Never retry an `unknown` request with a new request ID.
+
+Message bodies are limited to 64 KiB of UTF-8 and `send` never accepts a
+database key in process arguments.
 
 Reusing a request ID returns its stored receipt. Reusing it with different
 contents is rejected. A precondition failure occurs before composition and is

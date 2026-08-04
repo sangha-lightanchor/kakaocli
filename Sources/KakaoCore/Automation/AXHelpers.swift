@@ -248,10 +248,7 @@ public enum AXHelpers {
     public static func exactChatRows(_ table: AXUIElement, name: String) -> [AXUIElement] {
         children(table).filter { row in
             guard role(row) == "AXRow" else { return false }
-            let labels = findAll(row, role: "AXStaticText").filter {
-                identifier($0) == "_NS:18" && value($0) == name
-            }
-            return labels.count == 1
+            return exactRowName(row) == name
         }
     }
 
@@ -259,7 +256,7 @@ public enum AXHelpers {
         children(table).filter { row in
             guard role(row) == "AXRow" else { return false }
             return findAll(row, role: "AXImage").filter {
-                (description($0) ?? "").contains("badge me")
+                (description($0) ?? "").localizedCaseInsensitiveContains("badge me")
             }.count == 1
         }
     }
@@ -267,7 +264,43 @@ public enum AXHelpers {
     public static func exactRowName(_ row: AXUIElement) -> String? {
         let labels = findAll(row, role: "AXStaticText").filter { identifier($0) == "_NS:18" }
         guard labels.count == 1 else { return nil }
-        return value(labels[0])
+        return value(labels[0]) ?? title(labels[0])
+    }
+
+    /// Return KakaoTalk's chat-list table only when the selected Chats
+    /// navigation control and the direct window/scroll-area/table structure
+    /// are both unique. This is deliberately stricter than `chatListTable`,
+    /// which remains available to legacy non-send workflows.
+    public static func verifiedSendChatListTable(_ window: AXUIElement) -> AXUIElement? {
+        let selectedChatsControls = findAll(window, role: "AXCheckBox")
+            + findAll(window, role: "AXButton")
+            + findAll(window, role: "AXRadioButton")
+        let selectedMatches = selectedChatsControls.filter { element in
+            BackgroundSendSelector.isSelectedChatsNavigation(
+                NavigationControlEvidence(
+                    role: role(element),
+                    identifier: identifier(element),
+                    title: title(element),
+                    description: description(element),
+                    selected: boolAttribute(element, kAXSelectedAttribute as String) == true
+                        || boolAttribute(element, kAXValueAttribute as String) == true
+                )
+            )
+        }
+        guard selectedMatches.count == 1 else { return nil }
+
+        let candidates = children(window)
+            .filter { role($0) == "AXScrollArea" }
+            .flatMap(children)
+            .filter { table in
+                guard role(table) == "AXTable" else { return false }
+                let rows = children(table).filter { role($0) == "AXRow" }
+                guard !rows.isEmpty else { return false }
+                return rows.contains { exactRowName($0) != nil }
+                    || !selfChatRows(table).isEmpty
+            }
+        guard candidates.count == 1 else { return nil }
+        return candidates[0]
     }
 
     /// Scroll a table row into the visible area of its parent scroll area.
@@ -350,6 +383,17 @@ public enum AXHelpers {
             [row] as CFTypeRef
         )
         guard result == .success else { return false }
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            table,
+            kAXSelectedRowsAttribute as CFString,
+            &value
+        ) == .success,
+        let rows = value as? [AXUIElement], rows.count == 1 else { return false }
+        return CFEqual(rows[0], row)
+    }
+
+    public static func isExactlySelected(_ row: AXUIElement, in table: AXUIElement) -> Bool {
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(
             table,

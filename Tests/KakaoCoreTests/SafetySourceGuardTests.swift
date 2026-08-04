@@ -131,24 +131,26 @@ struct SafetySourceGuardTests {
         #expect(contents.contains("sendControlCandidates(in: room)"))
         #expect(contents.contains("return AXHelpers.children(room).filter"))
         #expect(contents.contains("AXHelpers.perform(control, kAXPressAction"))
+        #expect(contents.contains("let controls = waitForExactSendControls("))
+        #expect(contents.contains("timeout: 2"))
         #expect(contents.contains("run the exact-ID room warm-up"))
         #expect(contents.contains("AXHelpers.isCleanCompositionRoom(room, composer: composer)"))
         #expect(contents.contains("guard evidence.directChildCount == 18"))
         for identifier in [
-            "_NS:29", "_NS:164", "_NS:144", "_NS:10", "_NS:30",
-            "_NS:42", "_NS:78", "_NS:182", "_NS:47",
+            "_NS:29", "_NS:164", "_NS:144", "_NS:10", "_NS:54",
+            "_NS:78", "_NS:182", "_NS:47",
         ] {
             #expect(contents.contains(identifier), "Missing clean-composer identifier \(identifier)")
         }
-        #expect(contents.contains("evidence.identifierlessButtonCount == 9"))
-        #expect(contents.contains("evidence.emptyIdentifierlessButtonCount == 8"))
+        #expect(contents.contains("evidence.identifierlessButtonCount == 8"))
+        #expect(contents.contains("evidence.emptyIdentifierlessButtonCount == 7"))
+        #expect(contents.contains("evidence.anonymousNonLeafCount == 0"))
         #expect(contents.contains("evidence.nestedIdentifierlessButtonCount == 1"))
         #expect(contents.contains("evidence.composerIsLeaf"))
         #expect(helperContents.contains("nestedButtonIsClean"))
         #expect(helperContents.contains("composerChild.map({ CFEqual($0, composer) }) == true"))
         #expect(contents.contains("AXHelpers.identifier(element) == nil"))
-        #expect(contents.contains("SendUIValidator.isExplicitlyVisible("))
-        #expect(contents.contains("hidden == false"))
+        #expect(contents.contains("kAXHiddenAttribute as String) != true"))
         #expect(contents.contains("AXHelpers.hasContainedFrame(element, in: room)"))
         #expect(contents.contains("if !actionAttempted, composerMutationAttempted"))
         #expect(contents.contains("if currentValue == body"))
@@ -239,6 +241,10 @@ struct SafetySourceGuardTests {
         #expect(contents.contains("kAXWindowRole"))
         #expect(!contents.contains("NSRunningApplication"))
         #expect(!contents.contains("kAXRaiseAction"))
+        #expect(contents.contains("identifier(element) == \"_NS:87\""))
+        #expect(contents.contains("let elements = chatRowChromeElements(row)"))
+        #expect(contents.contains("if identifier(child) == \"_NS:87\""))
+        #expect(!contents.contains("_NS:91"))
     }
 
     @Test("confirmed-receipt recovery remains read-only and UI-free")

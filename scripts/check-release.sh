@@ -112,8 +112,17 @@ fi
 
 sender_source='Sources/KakaoCore/Automation/SafeKakaoSender.swift'
 helpers_source='Sources/KakaoCore/Automation/AXHelpers.swift'
+if ! rg -q --fixed-strings 'identifier(element) == "_NS:87"' "$helpers_source" || \
+   ! rg -q --fixed-strings 'let elements = chatRowChromeElements(row)' "$helpers_source" || \
+   ! rg -q --fixed-strings 'if identifier(child) == "_NS:87"' "$helpers_source" || \
+   rg -q --fixed-strings '_NS:91' "$helpers_source"; then
+  print -u2 'chat-row verification must certify the preview container without assuming dynamic payload children'
+  exit 1
+fi
 for sender_guard in \
   'AXHelpers.isCleanCompositionRoom(room, composer: composer)' \
+  'let controls = waitForExactSendControls(' \
+  'timeout: 2' \
   'return AXHelpers.children(room).filter'; do
   if ! rg -q --fixed-strings "$sender_guard" "$sender_source"; then
     print -u2 "background sender structural guard is missing: $sender_guard"
@@ -121,7 +130,7 @@ for sender_guard in \
   fi
 done
 for composition_guard in \
-  'fixedLeaves.count == 6' \
+  'fixedLeaves.count == 5' \
   'sliderIsClean' \
   'nestedButtonIsClean' \
   'composerChild.map({ CFEqual($0, composer) }) == true'; do
@@ -132,8 +141,9 @@ for composition_guard in \
 done
 for validator_guard in \
   'guard evidence.directChildCount == 18' \
-  'evidence.identifierlessButtonCount == 9' \
-  'evidence.emptyIdentifierlessButtonCount == 8' \
+  'evidence.identifierlessButtonCount == 8' \
+  'evidence.emptyIdentifierlessButtonCount == 7' \
+  'evidence.anonymousNonLeafCount == 0' \
   'evidence.nestedIdentifierlessButtonCount == 1' \
   'evidence.composerIsOnlyScrollChild' \
   'evidence.composerIsLeaf'; do
@@ -143,8 +153,8 @@ for validator_guard in \
   fi
 done
 for composer_identifier in \
-  '_NS:29' '_NS:164' '_NS:144' '_NS:10' '_NS:30' \
-  '_NS:42' '_NS:78' '_NS:182' '_NS:47'; do
+  '_NS:29' '_NS:164' '_NS:144' '_NS:10' '_NS:54' \
+  '_NS:78' '_NS:182' '_NS:47'; do
   if ! rg -q --fixed-strings "$composer_identifier" "$sender_source"; then
     print -u2 "clean-composer identifier is missing: $composer_identifier"
     exit 1
@@ -152,8 +162,7 @@ for composer_identifier in \
 done
 for send_control_guard in \
   'AXHelpers.identifier(element) == nil' \
-  'SendUIValidator.isExplicitlyVisible(' \
-  'hidden == false' \
+  'kAXHiddenAttribute as String) != true' \
   'AXHelpers.hasContainedFrame(element, in: room)' \
   'if !actionAttempted, composerMutationAttempted' \
   'if currentValue == body'; do

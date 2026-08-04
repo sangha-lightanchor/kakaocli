@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.8 — Dynamic chat-preview compatibility
+
+- Restore background exact-row verification for current KakaoTalk chat lists
+  whose preview containers hold zero, one, or multiple dynamic payload nodes.
+- Continue requiring exactly one direct Chats table, navigation proof, name,
+  profile control, metadata label, preview container, and destination row.
+- Update the fail-closed empty-composer fingerprint for KakaoTalk's current
+  `_NS:54` control and anonymous image/text leaves.
+- Treat a missing optional `AXHidden` attribute as unknown-but-not-hidden while
+  retaining exact role, label, frame, action, and enabled-state Send checks.
+- Wait up to two seconds for KakaoTalk to enable the exact Send control after
+  accepting the message, while continuously requiring unchanged foreground.
+
 ## 1.0.7 — Existing sender hardening
 
 - Keep the v1.0.6 exact-ID warm-up and control-only sender architecture.

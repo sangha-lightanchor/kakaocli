@@ -137,6 +137,8 @@ struct CompositionWindowEvidence: Sendable {
     let directChildCount: Int
     let identifiedDirectChildren: [CompositionElementEvidence]
     let identifierlessButtonCount: Int
+    let anonymousLeafRoles: [String]
+    let anonymousNonLeafCount: Int
     let fixedLeavesAreEmpty: Bool
     let sliderHasOneAnonymousLeafValueIndicator: Bool
     let emptyIdentifierlessButtonCount: Int
@@ -154,8 +156,7 @@ enum CompositionWindowValidator {
             CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
             CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
             CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
-            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
-            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:54"),
             CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
             CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
             CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
@@ -167,10 +168,15 @@ enum CompositionWindowValidator {
                 return false
             }
         }
-        return evidence.identifierlessButtonCount == 9
+        return evidence.identifierlessButtonCount == 8
+            && evidence.anonymousLeafRoles.sorted() == [
+                kAXImageRole as String,
+                kAXStaticTextRole as String,
+            ].sorted()
+            && evidence.anonymousNonLeafCount == 0
             && evidence.fixedLeavesAreEmpty
             && evidence.sliderHasOneAnonymousLeafValueIndicator
-            && evidence.emptyIdentifierlessButtonCount == 8
+            && evidence.emptyIdentifierlessButtonCount == 7
             && evidence.nestedIdentifierlessButtonCount == 1
             && evidence.nestedButtonHasTwoEmptyGroups
             && evidence.composerScrollCount == 1
@@ -181,10 +187,6 @@ enum CompositionWindowValidator {
 
 /// Pure fail-closed decisions used by both the real transport and unit tests.
 public enum SendUIValidator {
-    static func isExplicitlyVisible(hidden: Bool?) -> Bool {
-        hidden == false
-    }
-
     public static func isSelectedChatsNavigation(_ evidence: NavigationControlEvidence) -> Bool {
         guard evidence.selected == true else { return false }
         if evidence.role == kAXCheckBoxRole as String,
@@ -520,7 +522,11 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
                 )
             }
 
-            let controls = exactSendControls(in: compositionContainer)
+            let controls = waitForExactSendControls(
+                in: compositionContainer,
+                initialFrontmostProcessID: initialFrontmostProcessID,
+                timeout: 2
+            )
             if controls.count == 1, let control = controls.first {
                 guard CFEqual(control, preflightControl) else {
                     throw SendUIError.preconditionFailed("The exact Send control changed after composition")
@@ -698,14 +704,28 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         }
     }
 
+    private func waitForExactSendControls(
+        in room: AXUIElement,
+        initialFrontmostProcessID: pid_t,
+        timeout: TimeInterval
+    ) -> [AXUIElement] {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+                    == initialFrontmostProcessID else { return [] }
+            let controls = exactSendControls(in: room)
+            if !controls.isEmpty { return controls }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return exactSendControls(in: room)
+    }
+
     private func sendControlCandidates(in room: AXUIElement) -> [AXUIElement] {
         let accepted = Set(["send", "전송"])
         return AXHelpers.children(room).filter { element in
             guard AXHelpers.role(element) == kAXButtonRole as String,
                   AXHelpers.identifier(element) == nil,
-                  SendUIValidator.isExplicitlyVisible(
-                      hidden: AXHelpers.bool(element, kAXHiddenAttribute as String)
-                  ),
+                  AXHelpers.bool(element, kAXHiddenAttribute as String) != true,
                   AXHelpers.hasContainedFrame(element, in: room),
                   AXHelpers.actions(element).contains(kAXPressAction as String) else { return false }
             let labels = [AXHelpers.title(element), AXHelpers.description(element)]

@@ -16,13 +16,6 @@ struct SafeSendTests {
         unreadCount: 0
     )
 
-    @Test("Send controls must explicitly report that they are visible")
-    func sendControlVisibility() {
-        #expect(SendUIValidator.isExplicitlyVisible(hidden: false))
-        #expect(!SendUIValidator.isExplicitlyVisible(hidden: true))
-        #expect(!SendUIValidator.isExplicitlyVisible(hidden: nil))
-    }
-
     @Test("recognizes only selected structural Chats navigation controls")
     func chatsNavigation() {
         #expect(SendUIValidator.isSelectedChatsNavigation(
@@ -165,6 +158,12 @@ struct SafeSendTests {
         )))
         #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
             composerIsLeaf: false
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            anonymousLeafRoles: [kAXImageRole as String]
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            anonymousNonLeafCount: 1
         )))
     }
 
@@ -1031,8 +1030,7 @@ private let certifiedCompositionElements = [
     CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
     CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
     CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
-    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
-    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:54"),
     CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
     CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
     CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
@@ -1041,9 +1039,11 @@ private let certifiedCompositionElements = [
 private func cleanCompositionEvidence(
     directChildCount: Int = 18,
     identifiedDirectChildren: [CompositionElementEvidence] = certifiedCompositionElements,
+    anonymousLeafRoles: [String] = [kAXImageRole as String, kAXStaticTextRole as String],
+    anonymousNonLeafCount: Int = 0,
     fixedLeavesAreEmpty: Bool = true,
     sliderIsClean: Bool = true,
-    emptyButtonCount: Int = 8,
+    emptyButtonCount: Int = 7,
     nestedButtonCount: Int = 1,
     nestedButtonIsClean: Bool = true,
     composerIsOnlyChild: Bool = true,
@@ -1053,6 +1053,8 @@ private func cleanCompositionEvidence(
         directChildCount: directChildCount,
         identifiedDirectChildren: identifiedDirectChildren,
         identifierlessButtonCount: emptyButtonCount + nestedButtonCount,
+        anonymousLeafRoles: anonymousLeafRoles,
+        anonymousNonLeafCount: anonymousNonLeafCount,
         fixedLeavesAreEmpty: fixedLeavesAreEmpty,
         sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
         emptyIdentifierlessButtonCount: emptyButtonCount,

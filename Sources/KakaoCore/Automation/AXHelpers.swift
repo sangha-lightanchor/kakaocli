@@ -169,7 +169,7 @@ enum AXHelpers {
     }
 
     static func exactName(in row: AXUIElement) -> String? {
-        let labels = descendants(row) {
+        let labels = chatRowChromeElements(row).filter {
             role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:40"
         }
         guard labels.count == 1 else { return nil }
@@ -181,7 +181,7 @@ enum AXHelpers {
     }
 
     static func isSelfRow(_ row: AXUIElement) -> Bool {
-        descendants(row) { element in
+        chatRowChromeElements(row).filter { element in
             role(element) == kAXImageRole as String
                 && (description(element) ?? "").localizedCaseInsensitiveContains("badge me")
         }.count == 1
@@ -228,9 +228,13 @@ enum AXHelpers {
         let identifierlessButtons = children.filter {
             role($0) == kAXButtonRole as String && identifier($0) == nil
         }
+        let anonymousNonButtons = children.filter {
+            role($0) != kAXButtonRole as String && identifier($0) == nil
+        }
+        let anonymousLeaves = anonymousNonButtons.filter { self.children($0).isEmpty }
         let fixedLeaves = children.filter { child in
             guard let identifier = identifier(child) else { return false }
-            return ["_NS:164", "_NS:144", "_NS:10", "_NS:30", "_NS:42", "_NS:78"]
+            return ["_NS:164", "_NS:144", "_NS:10", "_NS:54", "_NS:78"]
                 .contains(identifier)
         }
         let sliders = children.filter { identifier($0) == "_NS:182" }
@@ -257,7 +261,9 @@ enum AXHelpers {
             directChildCount: children.count,
             identifiedDirectChildren: identifiedDirectChildren,
             identifierlessButtonCount: identifierlessButtons.count,
-            fixedLeavesAreEmpty: fixedLeaves.count == 6
+            anonymousLeafRoles: anonymousLeaves.compactMap { role($0) },
+            anonymousNonLeafCount: anonymousNonButtons.count - anonymousLeaves.count,
+            fixedLeavesAreEmpty: fixedLeaves.count == 5
                 && fixedLeaves.allSatisfy({ self.children($0).isEmpty }),
             sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
             emptyIdentifierlessButtonCount: emptyButtons.count,
@@ -279,7 +285,7 @@ enum AXHelpers {
     }
 
     private static func isChatListRow(_ row: AXUIElement) -> Bool {
-        let elements = descendants(row, matching: { _ in true })
+        let elements = chatRowChromeElements(row)
         let names = elements.filter {
             guard role($0) == kAXStaticTextRole as String,
                   identifier($0) == "_NS:40",
@@ -293,12 +299,8 @@ enum AXHelpers {
             role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:69"
         }
         let messagePreviews = elements.filter { element in
-            guard role(element) == kAXScrollAreaRole as String,
-                  identifier(element) == "_NS:87" else { return false }
-            let textAreas = descendants(element) {
-                role($0) == kAXTextAreaRole as String && identifier($0) == "_NS:91"
-            }
-            return textAreas.count == 1
+            role(element) == kAXScrollAreaRole as String
+                && identifier(element) == "_NS:87"
         }
         return SendUIValidator.isChatRowStructure(
             ChatRowStructureEvidence(
@@ -308,6 +310,24 @@ enum AXHelpers {
                 messagePreviewCount: messagePreviews.count
             )
         )
+    }
+
+    private static func chatRowChromeElements(
+        _ root: AXUIElement,
+        depth: Int = 0
+    ) -> [AXUIElement] {
+        guard depth <= 12 else { return [] }
+        var result = [root]
+        for child in children(root) {
+            // `_NS:87` is the certified preview container. Its descendants
+            // are message-dependent payload, not stable row chrome.
+            if identifier(child) == "_NS:87" {
+                result.append(child)
+            } else {
+                result += chatRowChromeElements(child, depth: depth + 1)
+            }
+        }
+        return result
     }
 }
 

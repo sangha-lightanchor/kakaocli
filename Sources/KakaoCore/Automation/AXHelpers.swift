@@ -115,10 +115,19 @@ public enum AXHelpers {
 
     static func composerCandidates(in room: AXUIElement) -> [AXUIElement] {
         guard isVerifiedRoomWindow(room) else { return [] }
-        return findAll(room, role: kAXTextAreaRole as String).filter { element in
-            identifier(element) == "_NS:51"
-                && isAttributeSettable(element, kAXValueAttribute as String)
-        }
+        // The current composer is the sole direct child of the certified
+        // direct `_NS:47` scroll area. Avoid recursively traversing message
+        // history, which is both slow and irrelevant to composition identity.
+        return children(room)
+            .filter {
+                role($0) == kAXScrollAreaRole as String && identifier($0) == "_NS:47"
+            }
+            .flatMap(children)
+            .filter { element in
+                role(element) == kAXTextAreaRole as String
+                    && identifier(element) == "_NS:51"
+                    && isAttributeSettable(element, kAXValueAttribute as String)
+            }
     }
 
     static func isCleanCompositionRoom(_ room: AXUIElement, composer: AXUIElement) -> Bool {
@@ -362,8 +371,12 @@ public enum AXHelpers {
     public static func selfChatRows(_ table: AXUIElement) -> [AXUIElement] {
         children(table).filter { row in
             guard role(row) == "AXRow" else { return false }
-            return findAll(row, role: "AXImage").filter {
-                (description($0) ?? "").localizedCaseInsensitiveContains("badge me")
+            // Stop at `_NS:87`: its message-preview payload may contain a
+            // large attachment tree and is not stable row identity chrome.
+            return chatRowIdentityChrome(row).filter {
+                role($0) == kAXImageRole as String
+                    && identifier($0) == "_NS:18"
+                    && (description($0) ?? "").localizedCaseInsensitiveContains("badge me")
             }.count == 1
         }
     }

@@ -404,6 +404,8 @@ struct BackgroundSendSelectorTests {
         #expect(helpers.contains(
             "return children(appElement).filter { role($0) == kAXWindowRole as String }"
         ))
+        #expect(helpers.contains("return chatRowIdentityChrome(row).filter"))
+        #expect(helpers.contains("identifier($0) == \"_NS:18\""))
         #expect(!status.contains("CredentialStore()"))
     }
 }

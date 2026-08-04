@@ -119,31 +119,39 @@ public final class SafeSendCoordinator: @unchecked Sendable {
                 break
             }
         } catch {
-            throw error
+            // Once the reservation exists, an unclassified transport error
+            // cannot prove that no action occurred. Continue confirmation and
+            // conservatively keep `unknown`; never expose a retry-safe error.
         }
 
         for attempt in 0..<confirmationAttempts {
-            if let logID = try database.confirmedOutgoing(
-                chatID: chat.id,
-                body: bodyData,
-                after: highWatermark
-            ) {
-                let receipt = SendReceipt(
-                    requestID: request.requestID,
+            do {
+                if let logID = try database.confirmedOutgoing(
                     chatID: chat.id,
-                    logID: logID,
-                    status: .confirmed
-                )
-                let claimed = try state.claimConfirmedSendAttempt(
-                    destinationKey: request.destination.storageKey,
-                    bodySHA256: bodyHash,
                     body: bodyData,
-                    highWatermark: highWatermark,
-                    receipt: receipt
-                )
-                // Another request ID already owning this exact log row makes
-                // attribution ambiguous. Never claim it and never retry UI.
-                return claimed ? receipt : provisional
+                    after: highWatermark
+                ) {
+                    let receipt = SendReceipt(
+                        requestID: request.requestID,
+                        chatID: chat.id,
+                        logID: logID,
+                        status: .confirmed
+                    )
+                    let claimed = try state.claimConfirmedSendAttempt(
+                        destinationKey: request.destination.storageKey,
+                        bodySHA256: bodyHash,
+                        body: bodyData,
+                        highWatermark: highWatermark,
+                        receipt: receipt
+                    )
+                    // Another request ID already owning this exact log row
+                    // makes attribution ambiguous. Never claim it or retry UI.
+                    return claimed ? receipt : provisional
+                }
+            } catch {
+                // A read or receipt-upgrade failure after the UI action has an
+                // unknown outcome. The durable reservation blocks UI replay.
+                return provisional
             }
             if attempt + 1 < confirmationAttempts, confirmationDelay > 0 {
                 Thread.sleep(forTimeInterval: confirmationDelay)

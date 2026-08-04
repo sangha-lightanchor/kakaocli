@@ -298,6 +298,50 @@ struct SafeSendTests {
         #expect(database.confirmationCalls == 1)
     }
 
+    @Test("post-action transport and confirmation errors return durable unknown")
+    func postActionErrorsRemainUnknown() throws {
+        struct UnexpectedTransportError: Error {}
+
+        let transportDatabase = MockDatabase(chat: target)
+        let transportState = MockState()
+        let transportUI = MockUI()
+        transportUI.onSubmit = { throw UnexpectedTransportError() }
+        let transportCoordinator = SafeSendCoordinator(
+            database: transportDatabase,
+            state: transportState,
+            ui: transportUI,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let transportRequest = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "transport uncertain"
+        )
+        #expect(try transportCoordinator.send(transportRequest).status == .unknown)
+        #expect(try transportCoordinator.send(transportRequest).status == .unknown)
+        #expect(transportUI.calls == 1)
+        #expect(try transportState.sendAttempt(requestID: transportRequest.requestID)?.receipt.status == .unknown)
+
+        let confirmationDatabase = MockDatabase(chat: target)
+        confirmationDatabase.confirmationError = KakaoClientError.state("confirmation read failed")
+        let confirmationState = MockState()
+        let confirmationUI = MockUI()
+        let confirmationCoordinator = SafeSendCoordinator(
+            database: confirmationDatabase,
+            state: confirmationState,
+            ui: confirmationUI,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let confirmationRequest = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "read uncertain"
+        )
+        #expect(try confirmationCoordinator.send(confirmationRequest).status == .unknown)
+        #expect(confirmationUI.calls == 1)
+        #expect(try confirmationState.sendAttempt(requestID: confirmationRequest.requestID)?.receipt.status == .unknown)
+    }
+
     @Test("uncertainty from the UI still receives read-only database confirmation")
     func uiUncertaintyConfirmed() throws {
         let database = MockDatabase(chat: target)
@@ -539,6 +583,7 @@ private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
     var confirmationBody: Data?
     var confirmationAfter: Int64?
     var confirmationCalls = 0
+    var confirmationError: Error?
     var uiIdentityCount = 1
 
     init(chat: Chat) { target = chat }
@@ -554,6 +599,7 @@ private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
         confirmationChat = chatID
         confirmationBody = body
         confirmationAfter = logID
+        if let confirmationError { throw confirmationError }
         return confirmedLogID
     }
     func attachmentMetadata(logID: Int64) throws -> String? { nil }

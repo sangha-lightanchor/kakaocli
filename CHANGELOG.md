@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.3 — Conservative post-action failures
+
+- Convert unclassified UI transport errors and database/receipt confirmation
+  failures after a reserved send action into durable `unknown` receipts. These
+  paths never expose an error that a caller could mistake as safe to retry.
+
 ## 1.0.2 — Prompt-free state key and verified recovery
 
 - Replaced the final runtime Keychain dependency with atomic, fail-closed

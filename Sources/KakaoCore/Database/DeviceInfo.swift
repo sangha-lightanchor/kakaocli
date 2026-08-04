@@ -12,9 +12,12 @@ public enum DeviceInfo {
         let pipe = Pipe()
         process.standardOutput = pipe
         try process.run()
+        // Drain the pipe before waiting so a future, larger ioreg response
+        // cannot deadlock on a full pipe buffer.
+        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else { throw KakaoError.uuidNotFound }
+        let output = String(data: outputData, encoding: .utf8) ?? ""
         // Parse: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
         guard let range = output.range(of: #""IOPlatformUUID" = "([^"]+)""#, options: .regularExpression),
               let uuidRange = output[range].range(of: #"[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}"#, options: .regularExpression)
@@ -54,10 +57,11 @@ public enum DeviceInfo {
     /// Tries multiple strategies in order:
     /// 1. FSChatWindowTransparency common suffix (legacy)
     /// 2. Direct key lookup (userId, user_id, etc.)
-    /// 3. Recover userId by reversing SHA-512 hash from plist revision keys
-    /// 4. FSChatWindowFrame_ common suffix
-    public static func userId() throws -> Int {
+    /// 3. FSChatWindowFrame_ common suffix
+    /// 4. Optionally recover userId by reversing a SHA-512 revision-key hash
+    public static func userId(allowExpensiveRecovery: Bool = false) throws -> Int {
         let plistPaths = [containerPreferencesPath, preferencesPath]
+        var recoveryHashes: [String] = []
         for plistPath in plistPaths {
             guard FileManager.default.fileExists(atPath: plistPath) else { continue }
 
@@ -84,17 +88,7 @@ public enum DeviceInfo {
                 if let str = plist[key] as? String, let id = Int(str) { return id }
             }
 
-            // Strategy 3: Recover userId from SHA-512 hash in plist revision keys.
-            // Newer KakaoTalk stores SHA-512(userId) as a suffix on keys like
-            // "DESIGNATEDFRIENDSREVISION:<sha512hex>". The active account has non-zero values.
-            // We brute-force the pre-image since userIds are typically small integers.
-            if let hash = activeAccountHash(from: plist) {
-                if let id = recoverUserIdFromSHA512(hexHash: hash) {
-                    return id
-                }
-            }
-
-            // Strategy 4: FSChatWindowFrame_ common suffix (newer KakaoTalk versions)
+            // Strategy 3: FSChatWindowFrame_ common suffix (newer KakaoTalk versions)
             let framePrefix = "NSWindow Frame FSChatWindowFrame_"
             let frameKeys = plist.keys.filter { $0.hasPrefix(framePrefix) }
             if frameKeys.count >= 2 {
@@ -103,9 +97,25 @@ public enum DeviceInfo {
                     return id
                 }
             }
+
+            if let hash = activeAccountHash(from: plist), !recoveryHashes.contains(hash) {
+                recoveryHashes.append(hash)
+            }
         }
 
-        throw KakaoError.userIdNotFound(["Could not extract from FSChatWindowTransparency, revision key SHA-512, or FSChatWindowFrame_ keys"])
+        // Reversing the revision-key hash may scan a large numeric space. It
+        // is reserved for an explicit auth refresh; ordinary reads use cached
+        // path/user-ID identity and never enter this loop.
+        if allowExpensiveRecovery {
+            for hash in recoveryHashes {
+                if let id = recoverUserIdFromSHA512(hexHash: hash) { return id }
+            }
+        }
+
+        let methods = allowExpensiveRecovery
+            ? "FSChatWindowTransparency, direct keys, FSChatWindowFrame_, or revision-key SHA-512"
+            : "FSChatWindowTransparency, direct keys, or FSChatWindowFrame_"
+        throw KakaoError.userIdNotFound(["Could not extract from \(methods)"])
     }
 
     /// Read AlertKakaoIDsList from plist as candidate user IDs.
@@ -199,7 +209,7 @@ public enum DeviceInfo {
         guard hexHash.count == 128 else { return nil }
         // Parse target hash to bytes
         var targetBytes = [UInt8](repeating: 0, count: 64)
-        var hexChars = Array(hexHash)
+        let hexChars = Array(hexHash)
         for i in 0..<64 {
             guard let byte = UInt8(String(hexChars[i*2...i*2+1]), radix: 16) else { return nil }
             targetBytes[i] = byte

@@ -91,47 +91,6 @@ struct SyncCommand: ParsableCommand {
 
 /// Resolve database path and key without opening the database.
 func resolveDatabasePath(dbPath: String?, key: String?) throws -> (path: String, key: String?) {
-    if let dbPath {
-        return (dbPath, key)
-    }
-    let uuid = try DeviceInfo.platformUUID()
-
-    // Try standard path: derive userId → derive dbName → find file
-    if let uid = try? DeviceInfo.userId() {
-        let dbName = KeyDerivation.databaseName(userId: uid, uuid: uuid)
-        let candidates = [
-            "\(DeviceInfo.containerPath)/\(dbName)",
-            "\(DeviceInfo.containerPath)/\(dbName).db",
-        ]
-        if let found = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
-            let secureKey = key ?? KeyDerivation.secureKey(userId: uid, uuid: uuid)
-            return (found, secureKey)
-        }
-    }
-
-    // Fallback: scan for DB file, try candidate userIds for the key
-    guard let discoveredPath = DeviceInfo.discoverDatabaseFile() else {
-        let uid = try DeviceInfo.userId()
-        let dbName = KeyDerivation.databaseName(userId: uid, uuid: uuid)
-        throw KakaoError.databaseNotFound("\(DeviceInfo.containerPath)/\(dbName)")
-    }
-
-    if let key {
-        return (discoveredPath, key)
-    }
-
-    // Try candidate userIds to find a working key
-    var candidateIds = (try? DeviceInfo.userId()).map { [$0] } ?? [Int]()
-    candidateIds += DeviceInfo.candidateUserIds().filter { !candidateIds.contains($0) }
-    for uid in candidateIds {
-        let candidateKey = KeyDerivation.secureKey(userId: uid, uuid: uuid)
-        let reader = DatabaseReader(databasePath: discoveredPath)
-        if reader.tryOpen(key: candidateKey) {
-            reader.close()
-            return (discoveredPath, candidateKey)
-        }
-    }
-
-    // Return the discovered path without a key — caller will get a decryption error
-    return (discoveredPath, nil)
+    let resolved = try DatabaseLocator.resolve(databasePath: dbPath, key: key)
+    return (resolved.path, resolved.key)
 }

@@ -30,14 +30,18 @@ fi
 if rg -n --fixed-strings --glob '*.swift' \
   -e '/usr/bin/security' \
   -e 'find-generic-password' \
-  -e 'com.kakaocli.sqlcipher' Sources; then
-  print -u2 'prompt-capable or persistent source-database Keychain access found'
+  -e 'com.kakaocli.sqlcipher' \
+  -e 'LocalAuthentication' \
+  -e 'SecItem' Sources; then
+  print -u2 'prompt-capable or persistent Keychain access found'
   exit 1
 fi
-if ! rg -q --fixed-strings 'interactionNotAllowed = true' Sources/KakaoCore/StateKeyStore.swift; then
-  print -u2 'state-key lookup is not explicitly noninteractive'
-  exit 1
-fi
+for state_key_guard in 'lstat(' 'fstat(' 'geteuid()' 'O_NOFOLLOW' 'O_EXCL' 'fsync(' '0o600'; do
+  if ! rg -q --fixed-strings "$state_key_guard" Sources/KakaoCore/StateKeyStore.swift; then
+    print -u2 "state-key file guard is missing: $state_key_guard"
+    exit 1
+  fi
+done
 
 if nm -u .build/release/kakaocli | rg '_CGEventPost$|_CGWarpMouseCursorPosition'; then
   print -u2 'global event or cursor symbol found in release binary'
@@ -50,6 +54,10 @@ if .build/release/kakaocli send --help | rg -n -- '--key([ ,>]|$)'; then
 fi
 if ! .build/release/kakaocli auth --help | rg -q -- '--key-stdin'; then
   print -u2 'safe stdin database-key setup command is missing'
+  exit 1
+fi
+if ! .build/release/kakaocli migrate confirmed-receipt --help | rg -q -- '--request-id'; then
+  print -u2 'verified confirmed-receipt recovery command is missing'
   exit 1
 fi
 

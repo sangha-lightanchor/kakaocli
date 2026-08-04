@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import Security
 import Testing
 @testable import KakaoCore
 
@@ -201,24 +200,96 @@ struct ServiceAndRuntimeTests {
         #expect(!FileManager.default.fileExists(atPath: cache.path))
     }
 
-    @Test("inaccessible state keys fail closed without rotation")
-    func inaccessibleStateKey() throws {
-        let store = MockStateSecretStore(reads: [.unavailable(errSecInteractionNotAllowed)])
-        #expect(throws: KakaoClientError.self) {
-            try StateKeyStore.loadOrCreate(store: store)
-        }
-        #expect(store.insertCalls == 0)
+    @Test("state key is a durable user-only 32-byte hex secret")
+    func stateKeyFile() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stateDirectory = root.appendingPathComponent("state", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stateDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let url = stateDirectory.appendingPathComponent("state.key")
+
+        let first = try StateKeyStore.loadOrCreate(at: url)
+        let second = try StateKeyStore.loadOrCreate(at: url)
+        #expect(first == second)
+        #expect(first.utf8.count == 64)
+        #expect(first.allSatisfy { $0.isHexDigit })
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        #expect((attributes[.size] as? NSNumber)?.intValue == 64)
     }
 
-    @Test("state-key creation races use the winner without overwrite")
-    func stateKeyCreationRace() throws {
-        let winner = String(repeating: "a", count: 64)
-        let store = MockStateSecretStore(
-            reads: [.notFound, .value(winner)],
-            insertResult: .duplicate
+    @Test("state key rejects insecure files without replacing them")
+    func insecureStateKeyFile() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stateDirectory = root.appendingPathComponent("state", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stateDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
         )
-        #expect(try StateKeyStore.loadOrCreate(store: store) == winner)
-        #expect(store.insertCalls == 1)
+        let url = stateDirectory.appendingPathComponent("state.key")
+        let invalid = String(repeating: "g", count: 64)
+        try Data(invalid.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+
+        #expect(throws: KakaoClientError.self) {
+            try StateKeyStore.loadOrCreate(at: url)
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == invalid)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        #expect(throws: KakaoClientError.self) {
+            try StateKeyStore.loadOrCreate(at: url)
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == invalid)
+    }
+
+    @Test("state key rejects symlinks")
+    func symlinkedStateKeyFile() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stateDirectory = root.appendingPathComponent("state", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stateDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let target = root.appendingPathComponent("target")
+        try Data(String(repeating: "a", count: 64).utf8).write(to: target)
+        let url = stateDirectory.appendingPathComponent("state.key")
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+
+        #expect(throws: KakaoClientError.self) {
+            try StateKeyStore.loadOrCreate(at: url)
+        }
+    }
+
+    @Test("concurrent state-key creation uses one atomic winner")
+    func stateKeyCreationRace() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stateDirectory = root.appendingPathComponent("state", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stateDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let url = stateDirectory.appendingPathComponent("state.key")
+        let results = StateKeyResults()
+
+        DispatchQueue.concurrentPerform(iterations: 16) { _ in
+            do { results.append(try StateKeyStore.loadOrCreate(at: url)) }
+            catch { results.recordFailure() }
+        }
+
+        #expect(results.failureCount == 0)
+        #expect(results.values.count == 16)
+        #expect(Set(results.values).count == 1)
     }
 
     @Test("shared limits reject hostile local input")
@@ -254,37 +325,33 @@ private final class LockedCounter: @unchecked Sendable {
     }
 }
 
-private final class MockStateSecretStore: StateSecretStoring, @unchecked Sendable {
+private final class StateKeyResults: @unchecked Sendable {
     private let lock = NSLock()
-    private var reads: [SecretReadResult]
-    private let insertResult: SecretInsertResult
-    private var storedInsertCalls = 0
+    private var storedValues: [String] = []
+    private var storedFailureCount = 0
 
-    init(
-        reads: [SecretReadResult],
-        insertResult: SecretInsertResult = .inserted
-    ) {
-        self.reads = reads
-        self.insertResult = insertResult
-    }
-
-    var insertCalls: Int {
+    var values: [String] {
         lock.lock()
         defer { lock.unlock() }
-        return storedInsertCalls
+        return storedValues
     }
 
-    func read() -> SecretReadResult {
+    var failureCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return reads.isEmpty ? .notFound : reads.removeFirst()
+        return storedFailureCount
     }
 
-    func insert(_ value: String) -> SecretInsertResult {
+    func append(_ value: String) {
         lock.lock()
-        storedInsertCalls += 1
+        storedValues.append(value)
         lock.unlock()
-        return insertResult
+    }
+
+    func recordFailure() {
+        lock.lock()
+        storedFailureCount += 1
+        lock.unlock()
     }
 }
 

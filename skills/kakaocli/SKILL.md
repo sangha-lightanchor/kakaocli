@@ -35,7 +35,11 @@ manually and leave the window rendered.
 If local database identity has not been cached, run `kakaocli auth --refresh`
 once. Normal reads never request the Kakao SQLCipher key from Keychain. Do not
 work around Keychain prompts by broadening partition lists or access for other
-applications.
+applications. The encrypted local state uses `~/.kakaocli/state.key`, which is
+a user-owned mode-`0600` file and must be backed up with `state.sqlite3`.
+If state recovery is required, use `kakaocli migrate confirmed-receipt` only
+with the exact prior body on stdin. It proves the outgoing source row and never
+invokes the UI.
 
 Archive access is explicit:
 

@@ -39,7 +39,7 @@ public actor KakaoClient {
         try database.open(key: configuration.key)
         let state = try StateStore(
             path: paths.stateDatabase.path,
-            key: try StateKeyStore.loadOrCreate(),
+            key: try StateKeyStore.loadOrCreate(at: paths.stateKey),
             archiveRoot: paths.archiveRoot.path
         )
         let sender = SafeSendCoordinator(

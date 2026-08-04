@@ -72,5 +72,9 @@ local and uncommitted.
 
 Normal source-database resolution caches only a mode-0600 path and user ID and
 derives the SQLCipher key in memory. It never reads or writes a source key in
-Keychain. State-key reads must be noninteractive and fail closed rather than
-opening a permission dialog or replacing an inaccessible key.
+Keychain. The separate state-database key lives only in the user-owned,
+mode-0600 regular file `~/.kakaocli/state.key`; it must be moved or backed up
+with `state.sqlite3`. Never add Keychain access to a normal runtime path.
+State recovery may restore a confirmed receipt only after proving the exact
+outgoing log row, chat ID, current-user authorship, and stdin bytes from the
+read-only source database; it must never invoke the UI.

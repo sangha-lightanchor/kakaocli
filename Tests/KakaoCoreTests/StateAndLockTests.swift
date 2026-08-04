@@ -114,26 +114,17 @@ struct StateAndLockTests {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let lock = SendTransactionLock(path: root.appendingPathComponent("send.lock").path)
-        let firstAcquired = DispatchSemaphore(value: 0)
-        let releaseFirst = DispatchSemaphore(value: 0)
         let secondAcquired = DispatchSemaphore(value: 0)
 
-        DispatchQueue.global().async {
-            guard (try? lock.lock()) != nil else { return }
-            firstAcquired.signal()
-            releaseFirst.wait()
-            lock.unlock()
-        }
-        #expect(firstAcquired.wait(timeout: .now() + 1) == .success)
-
+        try lock.lock()
         DispatchQueue.global().async {
             guard (try? lock.lock()) != nil else { return }
             secondAcquired.signal()
             lock.unlock()
         }
-        #expect(secondAcquired.wait(timeout: .now() + 0.1) == .timedOut)
-        releaseFirst.signal()
-        #expect(secondAcquired.wait(timeout: .now() + 1) == .success)
+        #expect(secondAcquired.wait(timeout: .now() + 0.25) == .timedOut)
+        lock.unlock()
+        #expect(secondAcquired.wait(timeout: .now() + 5) == .success)
     }
 
     @Test("send lock rejects symbolic-link targets")

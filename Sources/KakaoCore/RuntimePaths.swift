@@ -4,6 +4,7 @@ import Foundation
 public struct RuntimePaths: Sendable {
     public let stateDirectory: URL
     public let stateDatabase: URL
+    public let stateKey: URL
     public let runDirectory: URL
     public let socket: URL
     public let lock: URL
@@ -18,6 +19,7 @@ public struct RuntimePaths: Sendable {
     ) {
         self.stateDirectory = stateDirectory
         self.stateDatabase = stateDirectory.appendingPathComponent("state.sqlite3")
+        self.stateKey = stateDirectory.appendingPathComponent("state.key")
         self.runDirectory = stateDirectory.appendingPathComponent("run", isDirectory: true)
         self.socket = runDirectory.appendingPathComponent("kakaocli.sock")
         self.lock = runDirectory.appendingPathComponent("send.lock")

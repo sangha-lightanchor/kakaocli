@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2 — Prompt-free state key and verified recovery
+
+- Replaced the final runtime Keychain dependency with atomic, fail-closed
+  mode-0600 file storage for the separate local state-database key.
+- Added read-only source-database proof for restoring a previously confirmed
+  request receipt without invoking the UI or weakening duplicate protection.
+- Removed the obsolete LocalAuthentication and Security framework links and
+  made the same-process lock test deterministic under loaded CI runners.
+
 ## 1.0.1 — Noninteractive database and runtime hardening
 
 - Removed the source SQLCipher key from Keychain, command arguments, and local

@@ -16,11 +16,16 @@ Follow the complete shared safety contract in `AGENTS.md`.
 - `DatabaseChangeMonitor` watches the source DB/WAL and reconciles every 60s.
 - `DatabaseLocator` caches only a mode-0600 source path/user ID and derives the
   source SQLCipher key in memory; normal resolution never uses Keychain.
+- `StateKeyStore` atomically creates and validates the separate 32-byte state
+  key as a user-owned mode-0600 `~/.kakaocli/state.key` file; normal runtime
+  paths contain no Keychain or authentication-context calls.
 - `LocalServiceServer` uses a same-user, mode-0600 framed Unix socket, a
   lifetime lock, bounded concurrent handlers, and serializes database work
   through the actor.
 - `LegacyMigrator` imports prior local data idempotently and does not import or
   replay webhook state.
+- `ConfirmedReceiptImporter` restores idempotency only after read-only proof of
+  the exact outgoing row; it never invokes the UI.
 
 ## Database facts
 

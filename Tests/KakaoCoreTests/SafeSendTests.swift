@@ -465,6 +465,56 @@ struct SafeSendTests {
         #expect(try reader.chat(id: target.id)?.displayName == "Fresh Name")
     }
 
+    @Test("confirmed receipt recovery proves the exact outgoing row and is idempotent")
+    func confirmedReceiptRecovery() throws {
+        let database = MockDatabase(chat: target)
+        database.confirmedLogID = 77
+        let state = MockState()
+        let importer = ConfirmedReceiptImporter(database: database, state: state)
+        let request = SendRequest(
+            requestID: UUID(),
+            destination: .chatID(target.id),
+            body: "already sent"
+        )
+
+        let first = try importer.importReceipt(request: request, chatID: target.id, logID: 77)
+        let second = try importer.importReceipt(request: request, chatID: target.id, logID: 77)
+
+        #expect(first == second)
+        #expect(first.status == .confirmed)
+        #expect(first.logID == 77)
+        #expect(database.confirmationChat == target.id)
+        #expect(database.confirmationBody == Data("already sent".utf8))
+        #expect(database.confirmationAfter == 76)
+    }
+
+    @Test("confirmed receipt recovery rejects unproved rows and duplicate log ownership")
+    func confirmedReceiptRecoveryRejectsConflicts() throws {
+        let database = MockDatabase(chat: target)
+        let state = MockState()
+        let importer = ConfirmedReceiptImporter(database: database, state: state)
+        let unproved = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "missing"
+        )
+        #expect(throws: KakaoClientError.self) {
+            try importer.importReceipt(request: unproved, chatID: target.id, logID: 88)
+        }
+        #expect(try state.sendAttempt(requestID: unproved.requestID) == nil)
+
+        database.confirmedLogID = 88
+        let first = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "present"
+        )
+        let second = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "present"
+        )
+        _ = try importer.importReceipt(request: first, chatID: target.id, logID: 88)
+        #expect(throws: KakaoClientError.self) {
+            try importer.importReceipt(request: second, chatID: target.id, logID: 88)
+        }
+        #expect(try state.sendAttempt(requestID: second.requestID) == nil)
+    }
+
     private func runSQLite(path: String, sql: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")

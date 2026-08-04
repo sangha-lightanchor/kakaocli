@@ -26,8 +26,6 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("AppKit"),
-                .linkedFramework("LocalAuthentication"),
-                .linkedFramework("Security"),
             ]
         ),
         .systemLibrary(

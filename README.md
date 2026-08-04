@@ -35,8 +35,11 @@ database path and Kakao user ID, and is mode `0600`. The SQLCipher key is
 derived in memory and is never stored in Keychain, a file, or process
 arguments. If an exceptional recovery requires a caller-supplied key, pipe it
 to `kakaocli auth --key-stdin`; that key is used once and never persisted.
-Normal database discovery and state-key reads are noninteractive and never
-open a macOS permission dialog.
+The separate 32-byte encryption key for `state.sqlite3` is stored as exactly
+64 hexadecimal bytes in `~/.kakaocli/state.key`, a user-owned mode-`0600`
+regular file. Normal commands do not access Keychain and therefore do not open
+a macOS Keychain permission dialog. Back up or move `state.key` together with
+`state.sqlite3`; losing either one makes the encrypted local state unusable.
 
 ## Stable-ID CLI
 
@@ -163,6 +166,20 @@ kakaocli migrate legacy \
   --media-db /path/to/media.sqlite \
   --media-root /path/to/media/archive --json
 ```
+
+If a state database must be reconstructed, a prior confirmed request can be
+restored without sending. The command first proves that the supplied log ID is
+an outgoing row in the exact chat, with exact stdin bytes; `--self` additionally
+proves that the chat is the current account's self-chat:
+
+```bash
+printf '%s' 'Exact prior body' | kakaocli migrate confirmed-receipt \
+  --request-id UUID --chat-id 123456 --log-id 789 --self --stdin --json
+```
+
+The recovery command only writes the local idempotency receipt. It never opens
+or interacts with KakaoTalk and refuses request-ID or log-ID ownership
+conflicts.
 
 Only self-chat may be used for live acceptance testing. Sending to another
 person requires the operator's approval of the exact text and exact chat ID.

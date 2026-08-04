@@ -67,7 +67,9 @@ struct StatusCommand: ParsableCommand {
         print("-------------")
         let appState = AppLifecycle.detectState()
         print("App state:          \(appState.rawValue)")
-        let creds = CredentialStore()
-        print("Stored credentials: \(creds.hasCredentials ? "Yes" : "No")")
+        // Status/read/send do not need KakaoTalk login credentials. Avoid an
+        // implicit Keychain query (and its macOS permission prompt); the
+        // separate legacy `login` command owns credential inspection.
+        print("Stored credentials: Not checked (legacy login command only)")
     }
 }

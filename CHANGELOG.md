@@ -13,6 +13,7 @@
 - Support KakaoTalk 26.x direct-window exposure, current chat-row identifiers, and stateless navigation with complete chat-row schema proof
 - Require one direct visible frame-contained Send control, remove the composer Return fallback, keep the foreground app unchanged, and re-resolve database identity immediately before Send
 - Cache only the mode-0600 source database path/user ID, derive SQLCipher keys in memory, and make expensive identity recovery explicit through `auth --refresh`
+- Stop `status` from querying the legacy credential Keychain or causing an unrelated permission prompt
 - Harden state and lock files against symlinks, wrong owners, and non-user permissions; give each confirmed chat/log row one durable request owner
 - Reconcile stored `unknown` attempts read-only under the same request ID without repeating UI work
 - Limit send bodies to 64 KiB and remove source-database keys from send-process arguments

@@ -379,6 +379,10 @@ struct BackgroundSendSelectorTests {
             contentsOf: repository.appendingPathComponent("Sources/KakaoCore/Automation/AXHelpers.swift"),
             encoding: .utf8
         )
+        let status = try String(
+            contentsOf: repository.appendingPathComponent("Sources/KakaoCLI/Commands/StatusCommand.swift"),
+            encoding: .utf8
+        )
         for prohibited in [
             ".activate(",
             "kAXRaiseAction",
@@ -400,5 +404,6 @@ struct BackgroundSendSelectorTests {
         #expect(helpers.contains(
             "return children(appElement).filter { role($0) == kAXWindowRole as String }"
         ))
+        #expect(!status.contains("CredentialStore()"))
     }
 }

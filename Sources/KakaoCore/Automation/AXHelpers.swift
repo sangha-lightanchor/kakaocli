@@ -266,12 +266,59 @@ public enum AXHelpers {
     }
 
     public static func exactRowName(_ row: AXUIElement) -> String? {
-        let labels = findAll(row, role: "AXStaticText").filter {
-            BackgroundSendSelector.isAcceptedChatRowNameIdentifier(identifier($0))
+        let chrome = chatRowIdentityChrome(row)
+        let currentLabels = chrome.filter {
+            role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:40"
         }
-        guard labels.count == 1 else { return nil }
-        guard let name = value(labels[0]) ?? title(labels[0]), !name.isEmpty else { return nil }
+        if BackgroundSendSelector.isCurrentChatRowStructure(
+            currentChatRowStructure(from: chrome)
+        ), currentLabels.count == 1 {
+            guard let name = value(currentLabels[0]) ?? title(currentLabels[0]),
+                  !name.isEmpty else { return nil }
+            return name
+        }
+
+        // Legacy layout proof stays deliberately structural rather than
+        // accepting an arbitrary recursive static-text match.
+        let legacyLabels = children(row)
+            .filter { role($0) == kAXCellRole as String }
+            .flatMap(children)
+            .filter {
+                role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:18"
+            }
+        guard legacyLabels.count == 1,
+              let name = value(legacyLabels[0]) ?? title(legacyLabels[0]),
+              !name.isEmpty else { return nil }
         return name
+    }
+
+    private static func chatRowIdentityChrome(_ row: AXUIElement) -> [AXUIElement] {
+        func collect(_ element: AXUIElement) -> [AXUIElement] {
+            children(element).flatMap { child -> [AXUIElement] in
+                // Message previews contain dynamic payload and are never part
+                // of the destination identity proof.
+                if identifier(child) == "_NS:87" { return [child] }
+                return [child] + collect(child)
+            }
+        }
+        return collect(row)
+    }
+
+    private static func currentChatRowStructure(
+        from chrome: [AXUIElement]
+    ) -> ChatRowStructureEvidence {
+        ChatRowStructureEvidence(
+            nameLabelCount: chrome.filter {
+                role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:40"
+            }.count,
+            profileButtonCount: chrome.filter {
+                role($0) == kAXButtonRole as String && identifier($0) == "_NS:11"
+            }.count,
+            metadataLabelCount: chrome.filter {
+                role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:69"
+            }.count,
+            previewContainerCount: chrome.filter { identifier($0) == "_NS:87" }.count
+        )
     }
 
     /// Return KakaoTalk's chat-list table only when the selected Chats
@@ -310,7 +357,14 @@ public enum AXHelpers {
             }
         guard BackgroundSendSelector.isVerifiedChatList(
             navigationControls: navigationControls,
-            tableCandidateCount: candidates.count
+            tableCandidateCount: candidates.count,
+            statelessCandidateHasCurrentChatRowSchema: candidates.count == 1
+                && children(candidates[0]).contains { row in
+                    guard role(row) == kAXRowRole as String else { return false }
+                    return BackgroundSendSelector.isCurrentChatRowStructure(
+                        currentChatRowStructure(from: chatRowIdentityChrome(row))
+                    )
+                }
         ) else { return nil }
         return candidates[0]
     }

@@ -21,6 +21,13 @@ struct NavigationControlEvidence: Equatable {
     let enabled: Bool?
 }
 
+struct ChatRowStructureEvidence: Equatable {
+    let nameLabelCount: Int
+    let profileButtonCount: Int
+    let metadataLabelCount: Int
+    let previewContainerCount: Int
+}
+
 struct FinalRoomEvidence: Equatable {
     let applicationRunning: Bool
     let exactWindowSet: Bool
@@ -70,7 +77,8 @@ enum BackgroundSendSelector {
 
     static func isVerifiedChatList(
         navigationControls: [NavigationControlEvidence],
-        tableCandidateCount: Int
+        tableCandidateCount: Int,
+        statelessCandidateHasCurrentChatRowSchema: Bool
     ) -> Bool {
         guard tableCandidateCount == 1 else { return false }
         let selected = navigationControls.filter(isSelectedChatsNavigation)
@@ -78,11 +86,19 @@ enum BackgroundSendSelector {
             return true
         }
         guard selected.isEmpty else { return false }
-        return isStatelessChatsNavigationSet(navigationControls)
+        return statelessCandidateHasCurrentChatRowSchema
+            && isStatelessChatsNavigationSet(navigationControls)
     }
 
     static func isAcceptedChatRowNameIdentifier(_ identifier: String?) -> Bool {
-        Set(["_NS:18", "_NS:40", "Display Name"]).contains(identifier)
+        Set(["_NS:18", "_NS:40"]).contains(identifier)
+    }
+
+    static func isCurrentChatRowStructure(_ evidence: ChatRowStructureEvidence) -> Bool {
+        evidence.nameLabelCount == 1
+            && evidence.profileButtonCount == 1
+            && evidence.metadataLabelCount == 1
+            && evidence.previewContainerCount == 1
     }
 
     static func preparation(

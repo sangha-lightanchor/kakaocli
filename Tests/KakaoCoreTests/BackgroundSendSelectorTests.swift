@@ -117,7 +117,8 @@ struct BackgroundSendSelectorTests {
         }
         #expect(BackgroundSendSelector.isVerifiedChatList(
             navigationControls: valid,
-            tableCandidateCount: 1
+            tableCandidateCount: 1,
+            statelessCandidateHasCurrentChatRowSchema: true
         ))
 
         let invalidSets = [
@@ -157,22 +158,60 @@ struct BackgroundSendSelectorTests {
         for evidence in invalidSets {
             #expect(!BackgroundSendSelector.isVerifiedChatList(
                 navigationControls: evidence,
-                tableCandidateCount: 1
+                tableCandidateCount: 1,
+                statelessCandidateHasCurrentChatRowSchema: true
             ))
         }
         #expect(!BackgroundSendSelector.isVerifiedChatList(
             navigationControls: valid,
-            tableCandidateCount: 2
+            tableCandidateCount: 2,
+            statelessCandidateHasCurrentChatRowSchema: true
+        ))
+        #expect(!BackgroundSendSelector.isVerifiedChatList(
+            navigationControls: valid,
+            tableCandidateCount: 1,
+            statelessCandidateHasCurrentChatRowSchema: false
         ))
     }
 
     @Test("accepts only known versioned row-name identifiers")
     func rowNameIdentifiers() {
-        for identifier in ["_NS:18", "_NS:40", "Display Name"] {
+        for identifier in ["_NS:18", "_NS:40"] {
             #expect(BackgroundSendSelector.isAcceptedChatRowNameIdentifier(identifier))
         }
-        for identifier in [nil, "_NS:69", "AXStaticText", ""] {
+        for identifier in [nil, "_NS:69", "Display Name", "AXStaticText", ""] {
             #expect(!BackgroundSendSelector.isAcceptedChatRowNameIdentifier(identifier))
+        }
+    }
+
+    @Test("requires the complete unique current chat-row schema")
+    func currentChatRowStructure() {
+        let valid = ChatRowStructureEvidence(
+            nameLabelCount: 1,
+            profileButtonCount: 1,
+            metadataLabelCount: 1,
+            previewContainerCount: 1
+        )
+        #expect(BackgroundSendSelector.isCurrentChatRowStructure(valid))
+        for keyPath in [
+            \ChatRowStructureEvidence.nameLabelCount,
+            \ChatRowStructureEvidence.profileButtonCount,
+            \ChatRowStructureEvidence.metadataLabelCount,
+            \ChatRowStructureEvidence.previewContainerCount,
+        ] {
+            for invalidCount in [0, 2] {
+                let invalid = ChatRowStructureEvidence(
+                    nameLabelCount: keyPath == \ChatRowStructureEvidence.nameLabelCount
+                        ? invalidCount : 1,
+                    profileButtonCount: keyPath == \ChatRowStructureEvidence.profileButtonCount
+                        ? invalidCount : 1,
+                    metadataLabelCount: keyPath == \ChatRowStructureEvidence.metadataLabelCount
+                        ? invalidCount : 1,
+                    previewContainerCount: keyPath == \ChatRowStructureEvidence.previewContainerCount
+                        ? invalidCount : 1
+                )
+                #expect(!BackgroundSendSelector.isCurrentChatRowStructure(invalid))
+            }
         }
     }
 

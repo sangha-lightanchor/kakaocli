@@ -31,7 +31,10 @@ public final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         let processID = runningApp.processIdentifier
         let app = AXUIElementCreateApplication(processID)
         var windows = AXHelpers.windows(app)
-        let mainWindows = windows.filter { AXHelpers.identifier($0) == "Main Window" }
+        let mainWindows = windows.filter {
+            AXHelpers.role($0) == kAXWindowRole as String
+                && AXHelpers.identifier($0) == "Main Window"
+        }
         guard mainWindows.count == 1, let mainWindow = mainWindows.first else {
             throw AutomationError.preconditionFailed(
                 "KakaoTalk's main window is not rendered; foreground it manually"

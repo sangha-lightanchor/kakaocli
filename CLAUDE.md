@@ -7,10 +7,16 @@ Follow the complete shared safety contract in `AGENTS.md`.
 - `KakaoClient` is the concurrency-safe public actor and owns the persistent
   read-only database connection, send serialization, events, and archive work.
 - `SafeSendCoordinator` owns request validation, idempotency, the full send
-  lock, high-water snapshot, exact-byte confirmation, and receipts.
+  lock, no-send warm-up ordering, high-water snapshot, exact-byte confirmation,
+  and receipts.
+- `ForegroundRoomWarmup` is the only foreground-capable component. It opens one
+  exact database-resolved row through its native context menu and one exact
+  localized enter-chatroom AXPress, restores the prior app, and has no body,
+  focus/selection, keyboard-event, or Send-control capability.
 - `SafeKakaoSender` is the only send UI transport. Its pre-action failures prove
   no action occurred; post-control uncertainty becomes `unknown`. It operates
-  only on one already-open exact target room, never mutates AX focus/selection,
+  only on a prepared exact target room, allows other structurally verified room
+  windows to remain untouched, never activates or mutates AX focus/selection,
   and sends only through one exact AXPress-capable Send control.
 - `StateStore` is an encrypted SQLCipher database for send attempts, allowlist,
   raw/normalized archive data, content hashes, configuration, and webhook
@@ -44,7 +50,8 @@ Follow the complete shared safety contract in `AGENTS.md`.
 ## Verification before release
 
 Run the unit suite, release build, `git diff --check`, a secret scan, the active
-surface product-neutral guard, CLI help/dry-run checks, socket permission and
-warm-service timing checks, and release binary size check. Live validation is
-self-chat only and must independently confirm the database row while another
-app remains frontmost.
+surface product-neutral guard, exact warm-up source/symbol guards, CLI
+help/dry-run checks, socket permission and warm-service timing checks, and
+release binary size check. Live warm-up validation composes/sends nothing; live
+send validation is self-chat only and must independently confirm the database
+row after the prior foreground app is restored.

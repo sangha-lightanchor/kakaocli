@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.6 — Exact-ID room warm-up
+
+- Add automatic, no-message room warm-up before sends and an explicit
+  `kakaocli warmup --chat-id/--self` command.
+- Isolate temporary KakaoTalk activation and the exact row-bound native
+  enter-chatroom context-menu action in a single guarded source file; verify
+  the exact newly opened room and restore the prior application before
+  composing. No keyboard event is created or posted.
+- Keep the normal sender control-only and allow unrelated structurally verified
+  room windows to remain open and untouched.
+- Add warm-up receipts, local-service protocol v2 routing, no-reservation
+  ordering tests, restricted-source/symbol release guards, and CLI help checks.
+
 ## 1.0.5 — Strict background control-only sending
 
 - Remove all Accessibility focus/row-selection mutation and all keyboard event

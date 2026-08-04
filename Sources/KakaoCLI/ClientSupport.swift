@@ -17,6 +17,18 @@ func serviceConnection() -> LocalServiceConnection {
     LocalServiceConnection(socketURL: RuntimePaths().socket)
 }
 
+func requireCurrentService(_ connection: LocalServiceConnection) throws {
+    let status = try connection.call(
+        LocalServiceRequest(method: "status"),
+        as: ServiceStatus.self
+    )
+    guard status.protocolVersion == LocalServiceServer.protocolVersion else {
+        throw ValidationError(
+            "The running kakaocli service uses protocol \(status.protocolVersion); restart it before UI work"
+        )
+    }
+}
+
 func parseDuration(_ value: String?) -> Date? {
     guard let value else { return nil }
     return KakaoLimits.date(sinceDuration: value)

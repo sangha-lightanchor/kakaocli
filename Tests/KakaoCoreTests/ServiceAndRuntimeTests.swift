@@ -21,6 +21,12 @@ struct ServiceAndRuntimeTests {
         #expect(decoded.method == "messages")
         #expect(decoded.limit == 25)
 
+        let warmup = LocalServiceRequest(method: "warmup_v2", destination: .selfChat)
+        let warmupData = try JSONEncoder().encode(warmup)
+        let decodedWarmup = try JSONDecoder().decode(LocalServiceRequest.self, from: warmupData)
+        #expect(decodedWarmup.method == "warmup_v2")
+        #expect(decodedWarmup.destination == .selfChat)
+
         #expect(throws: KakaoClientError.self) {
             try LocalServiceIO.writeFrame(request, to: sockets[0], maximumBytes: 1)
         }

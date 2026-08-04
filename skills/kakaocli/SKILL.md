@@ -23,20 +23,31 @@ printf '%s' 'self-chat test' | \
   kakaocli send --self --stdin --request-id "$(uuidgen)" --json
 ```
 
+To prepare a room without composing or sending:
+
+```bash
+kakaocli warmup --chat-id 123456 --json
+kakaocli warmup --self --json
+```
+
 Treat `confirmed` as delivered only after its `log_id` is present. Treat
 `unknown` as possibly delivered: never retry it automatically or with a new
 request ID. Repeating the exact request with the same request ID performs
 read-only reconciliation and never invokes another UI action.
 
-Never try to make KakaoTalk visible through automation. If kakaocli reports
-that the app or main window is unavailable, ask the user to foreground it
-manually and leave the window rendered.
+KakaoTalk must already be running with its main window rendered. If either is
+unavailable, ask the user to open KakaoTalk once; never add or invent a
+`--foreground` option.
 
-Before sending, the exact target room must already be open with an empty
-composer and no other chat-room window open. Ask the user to arrange that state
-manually, then let them switch back to their working app. kakaocli never
-focuses/selects a row, opens a room, or posts Return; it uses only the exact
-room's verified Send control.
+When the exact target room is closed, `send` automatically runs the no-message
+warm-up first. It may briefly activate KakaoTalk, open only the exact
+database-resolved row, and restore the prior app. The room can then be reused
+without manual reopening until that room is closed or KakaoTalk restarts.
+Other structurally verified rooms remain untouched. If the target is already
+open, unrelated drafts are left unchanged; if foreground warm-up is needed, it
+fails before activation while any other room has a draft or queued/ambiguous
+composition state. The strict sender itself remains background/control-only
+and uses only the exact target room's verified Send control.
 
 If local database identity has not been cached, run `kakaocli auth --refresh`
 once. Normal reads never request the Kakao SQLCipher key from Keychain. Do not

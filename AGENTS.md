@@ -19,22 +19,34 @@ Homebrew system library.
 - Every send requires a caller-supplied UUID request ID.
 - Hold the actor queue and cross-process file lock for the entire transaction,
   including database confirmation.
-- Never launch or activate KakaoTalk, raise a window, move the cursor, or post
-  global keyboard/mouse input. Users may foreground KakaoTalk themselves.
-- Reject every unrelated or additional open room. Reuse one exact target-title
-  room only after the database proves its display identity is globally unique,
-  the exact destination row still exists once, and the room has one empty
-  composer. If the target room is not already open, fail before UI mutation and
-  ask the user to open it manually.
+- Never launch KakaoTalk, raise/order a window, move the cursor, or post global
+  keyboard/mouse input. Never add `--foreground`.
+- The only activation exception is `ForegroundRoomWarmup.swift`. When the exact
+  target room is absent, it may temporarily activate the one verified KakaoTalk
+  process, invoke `AXShowMenu` only on the database-resolved exact row cell,
+  press exactly one Kakao-localized `ChatTab_Rightclick_GoChatRoom` menu item,
+  restore the exact prior app immediately, then verify one new exact-title room
+  with an empty clean composer in the background. It must never receive message
+  bytes or discover/invoke a Send control.
+- Permit multiple open rooms only when every non-main window has the strict room
+  fingerprint and stable composer. Require at most one target-title room and an
+  empty target composer. Reuse leaves unrelated drafts unchanged, but a
+  foreground warm-up fails before activation if any unrelated room contains a
+  draft or queued/ambiguous composition state that redirected physical input
+  could deliver.
 - Resolve an ID through the database, then require exactly one matching UI row.
   Prove the current Chats view from one direct navigation set and one
   chat-specific table schema; never treat a merely present `chatrooms` control
   or a generic table as selected-view proof.
-  Reverify the same row, window, composer, body, foreground application, and
-  exact Send control before invocation.
-- Never mutate Accessibility focus or selected rows, and never create or post
-  keyboard/mouse events. Invoke only one exact enabled Send/전송 AXPress control
-  from the already-open verified target room.
+  Reverify the same row, unordered window set, composer, body, foreground
+  application, and exact Send control before invocation.
+- The normal sender must never activate, mutate Accessibility focus/selection,
+  or create/post keyboard or mouse events. Invoke only one exact enabled
+  Send/전송 AXPress control from the prepared verified target room.
+- Automatic warm-up occurs under the same actor and cross-process lock but
+  before the high-water snapshot and durable send reservation. Warm-up failure
+  is no-send/retry-safe; once the reservation exists, existing unknown-outcome
+  rules apply.
 - Snapshot the intended chat's log-ID high-water mark before composing and
   confirm exact outgoing UTF-8 bytes only under that same chat ID.
 - Return `confirmed` or `unknown`. Persist both. Reusing the exact same request
@@ -43,9 +55,10 @@ Homebrew system library.
   ID with different content.
 - Live tests are self-chat only. Never send a test to another person's room.
 
-`Tests/KakaoCoreTests/SafetySourceGuardTests.swift` prevents activation,
-raising, focus/selection mutation, keyboard/mouse events, cursor movement, and
-removed-option regressions.
+`Tests/KakaoCoreTests/SafetySourceGuardTests.swift` restricts activation and the
+exact row-menu open action to the one warm-up file, and prevents focus/selection
+mutation, keyboard/global input, raising, cursor movement, delivery capability
+in warm-up, and removed-option regressions everywhere.
 
 ## Archive and service
 

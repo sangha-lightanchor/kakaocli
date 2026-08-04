@@ -43,6 +43,21 @@ public struct SendReceipt: Codable, Sendable, Equatable {
     }
 }
 
+public enum RoomWarmupStatus: String, Codable, Sendable {
+    case alreadyOpen = "already_open"
+    case opened
+}
+
+public struct RoomWarmupReceipt: Codable, Sendable, Equatable {
+    public let chatID: ChatID
+    public let status: RoomWarmupStatus
+
+    public init(chatID: ChatID, status: RoomWarmupStatus) {
+        self.chatID = chatID
+        self.status = status
+    }
+}
+
 public enum KakaoEvent: Sendable, Equatable {
     case message(Message)
     case archiveStatus(ArchiveStatus)

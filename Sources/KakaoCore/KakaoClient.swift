@@ -42,10 +42,12 @@ public actor KakaoClient {
             key: try StateKeyStore.loadOrCreate(at: paths.stateKey),
             archiveRoot: paths.archiveRoot.path
         )
+        let ui = SafeKakaoSender()
         let sender = SafeSendCoordinator(
             database: database,
             state: state,
-            ui: SafeKakaoSender(),
+            ui: ui,
+            roomPreparer: ui,
             transactionLock: SendTransactionLock(path: paths.lock.path)
         )
         let media = MediaArchiver(state: state, root: paths.archiveRoot)
@@ -82,6 +84,10 @@ public actor KakaoClient {
     public func send(_ request: SendRequest) throws -> SendReceipt {
         try KakaoLimits.validateSendBody(request.body)
         return try sender.send(request)
+    }
+
+    public func warmup(destination: SendDestination) throws -> RoomWarmupReceipt {
+        try sender.warmup(destination)
     }
 
     public func events() -> AsyncThrowingStream<KakaoEvent, Error> {

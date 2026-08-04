@@ -14,6 +14,7 @@ public struct LocalServiceRequest: Codable, Sendable {
     public let limit: Int?
     public let chatID: ChatID?
     public let since: Date?
+    public let destination: SendDestination?
     public let sendRequest: SendRequest?
 
     public init(
@@ -22,6 +23,7 @@ public struct LocalServiceRequest: Codable, Sendable {
         limit: Int? = nil,
         chatID: ChatID? = nil,
         since: Date? = nil,
+        destination: SendDestination? = nil,
         sendRequest: SendRequest? = nil
     ) {
         self.method = method
@@ -29,6 +31,7 @@ public struct LocalServiceRequest: Codable, Sendable {
         self.limit = limit
         self.chatID = chatID
         self.since = since
+        self.destination = destination
         self.sendRequest = sendRequest
     }
 }
@@ -42,7 +45,7 @@ public struct LocalServiceResponse: Codable, Sendable {
 /// A local, same-user service. The lifetime lock is held from before stale
 /// socket inspection until the bound socket has been removed.
 public final class LocalServiceServer: @unchecked Sendable {
-    public static let protocolVersion = 1
+    public static let protocolVersion = 2
 
     private let socketURL: URL
     private let lifetimeLockURL: URL
@@ -199,12 +202,17 @@ public final class LocalServiceServer: @unchecked Sendable {
             payload = try encoder.encode(
                 try await client.messages(chatID: request.chatID, since: request.since, limit: limit)
             )
-        case "send":
+        case "send", "send_v2":
             guard let sendRequest = request.sendRequest else {
                 throw KakaoClientError.invalidRequest("Service send request is missing its payload")
             }
             try KakaoLimits.validateSendBody(sendRequest.body)
             payload = try encoder.encode(try await client.send(sendRequest))
+        case "warmup_v2":
+            guard let destination = request.destination else {
+                throw KakaoClientError.invalidRequest("Service warm-up request is missing its destination")
+            }
+            payload = try encoder.encode(try await client.warmup(destination: destination))
         case "archive_status":
             payload = try encoder.encode(try await client.archiveStatus())
         default:

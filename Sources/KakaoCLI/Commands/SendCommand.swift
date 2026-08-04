@@ -5,7 +5,7 @@ import KakaoCore
 struct SendCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "send",
-        abstract: "Safely send stdin to an exact chat ID or self-chat"
+        abstract: "Warm the exact room if needed, then safely send stdin"
     )
 
     @Option(name: .long, help: "Exact chat ID")
@@ -64,8 +64,9 @@ struct SendCommand: AsyncParsableCommand {
         let receipt: SendReceipt
         let connection = serviceConnection()
         if !database.usesOverride, connection.isAvailable {
+            try requireCurrentService(connection)
             receipt = try connection.call(
-                LocalServiceRequest(method: "send", sendRequest: request),
+                LocalServiceRequest(method: "send_v2", sendRequest: request),
                 as: SendReceipt.self
             )
         } else {

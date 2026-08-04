@@ -94,16 +94,12 @@
   <text class="me" x="64" y="438">Me:</text>
   <text class="msg" x="96" y="438">ㅇㅇ 수고~ 주말 잘 보내!</text>
 
-  <!-- Command 4: send -->
+  <!-- Command 4: warm-up and send -->
   <text class="prompt" x="16" y="478">$</text>
-  <text class="cmd" x="28" y="478">printf message | kakaocli send --chat-id 123456 --stdin --request-id UUID</text>
+  <text class="cmd" x="28" y="478">kakaocli warmup --chat-id 123456</text>
 
-  <text class="dim" x="16" y="502">confirmed request_id=UUID chat_id=123456</text>
-  <text class="dim" x="16" y="522">log_id=3899575742885486593</text>
+  <text class="dim" x="16" y="502">opened chat_id=123456 · prior app restored · no message sent</text>
+  <text class="cmd" x="16" y="522">printf message | kakaocli send --chat-id 123456 --stdin --request-id UUID</text>
 
-  <!-- Cursor -->
-  <text class="prompt" x="16" y="548">$</text>
-  <rect fill="#cdd6f4" x="28" y="537" width="8" height="16" opacity="0.7">
-    <animate attributeName="opacity" values="0.7;0;0.7" dur="1.2s" repeatCount="indefinite"/>
-  </rect>
+  <text class="dim" x="16" y="548">confirmed request_id=UUID chat_id=123456 log_id=3899575742885486593</text>
 </svg>

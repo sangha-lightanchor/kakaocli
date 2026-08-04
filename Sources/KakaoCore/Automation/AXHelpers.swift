@@ -2,8 +2,9 @@ import ApplicationServices
 import Foundation
 
 /// Accessibility helpers intentionally limited to element inspection, direct
-/// attribute mutation, and actions on already-rendered KakaoTalk controls.
-/// There is no app activation, window raise, cursor movement, or global input.
+/// value mutation, and actions on already-rendered KakaoTalk controls. The
+/// narrowly scoped foreground room warm-up owns only exact row-menu discovery;
+/// keyboard, focus, and selection mutation are prohibited everywhere.
 enum AXHelpers {
     enum ChatListResolution {
         case verified(AXUIElement)
@@ -53,6 +54,38 @@ enum AXHelpers {
     static func value(_ element: AXUIElement) -> String? { string(element, kAXValueAttribute as String) }
     static func identifier(_ element: AXUIElement) -> String? { string(element, kAXIdentifierAttribute as String) }
     static func description(_ element: AXUIElement) -> String? { string(element, kAXDescriptionAttribute as String) }
+
+    static func rect(_ element: AXUIElement) -> CGRect? {
+        var rawPosition: CFTypeRef?
+        var rawSize: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXPositionAttribute as CFString, &rawPosition
+        ) == .success,
+        AXUIElementCopyAttributeValue(
+            element, kAXSizeAttribute as CFString, &rawSize
+        ) == .success,
+        let rawPosition, let rawSize,
+        CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+        CFGetTypeID(rawSize) == AXValueGetTypeID() else { return nil }
+
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetType(rawPosition as! AXValue) == .cgPoint,
+              AXValueGetValue(rawPosition as! AXValue, .cgPoint, &point),
+              AXValueGetType(rawSize as! AXValue) == .cgSize,
+              AXValueGetValue(rawSize as! AXValue, .cgSize, &size) else { return nil }
+        let rect = CGRect(origin: point, size: size)
+        guard !rect.isNull, !rect.isInfinite,
+              rect.minX.isFinite, rect.minY.isFinite,
+              rect.width.isFinite, rect.height.isFinite,
+              rect.width > 0, rect.height > 0 else { return nil }
+        return rect
+    }
+
+    static func hasContainedFrame(_ element: AXUIElement, in container: AXUIElement) -> Bool {
+        guard let frame = rect(element), let containerFrame = rect(container) else { return false }
+        return containerFrame.contains(frame)
+    }
 
     static func setValue(_ element: AXUIElement, _ value: String) -> Bool {
         AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef) == .success
@@ -154,6 +187,97 @@ enum AXHelpers {
         }.count == 1
     }
 
+    static func matchingRows(in table: AXUIElement, chat: Chat) -> [AXUIElement] {
+        rows(in: table).filter { row in
+            chat.isSelfChat
+                ? isSelfRow(row)
+                : exactName(in: row) == chat.displayName
+        }
+    }
+
+    static func isVerifiedRoomWindow(_ room: AXUIElement) -> Bool {
+        role(room) == kAXWindowRole as String
+            && subrole(room) == kAXStandardWindowSubrole as String
+            && identifier(room) == "_NS:441"
+            && bool(room, kAXMinimizedAttribute as String) == false
+    }
+
+    static func composerCandidates(in room: AXUIElement) -> [AXUIElement] {
+        guard isVerifiedRoomWindow(room) else { return [] }
+        return descendants(room) { element in
+            role(element) == kAXTextAreaRole as String
+                && identifier(element) == "_NS:51"
+                && isSettable(element, kAXValueAttribute as String)
+        }
+    }
+
+    /// Current KakaoTalk clean composition chrome. The message-history table
+    /// below `_NS:29` is intentionally variable; every composition-adjacent
+    /// direct child and its fixed subtree is fail-closed. Extra reply, search,
+    /// edit, attachment, or preview controls therefore prevent composition.
+    static func isCleanCompositionRoom(
+        _ room: AXUIElement,
+        composer: AXUIElement
+    ) -> Bool {
+        guard isVerifiedRoomWindow(room) else { return false }
+        let children = children(room)
+        let identifiedDirectChildren = children.compactMap { child -> CompositionElementEvidence? in
+            guard let role = role(child), let identifier = identifier(child) else { return nil }
+            return CompositionElementEvidence(role: role, identifier: identifier)
+        }
+        let identifierlessButtons = children.filter {
+            role($0) == kAXButtonRole as String && identifier($0) == nil
+        }
+        let fixedLeaves = children.filter { child in
+            guard let identifier = identifier(child) else { return false }
+            return ["_NS:164", "_NS:144", "_NS:10", "_NS:30", "_NS:42", "_NS:78"]
+                .contains(identifier)
+        }
+        let sliders = children.filter { identifier($0) == "_NS:182" }
+        let sliderChild = sliders.first.flatMap { self.children($0).only }
+        let sliderIsClean = sliders.count == 1
+            && sliderChild.map { role($0) == kAXValueIndicatorRole as String } == true
+            && sliderChild.map { identifier($0) == nil } == true
+            && sliderChild.map { self.children($0).isEmpty } == true
+        let emptyButtons = identifierlessButtons.filter { self.children($0).isEmpty }
+        let nestedButtons = identifierlessButtons.filter { !self.children($0).isEmpty }
+        let firstGroup = nestedButtons.first.flatMap { self.children($0).only }
+        let secondGroup = firstGroup.flatMap { self.children($0).only }
+        let nestedButtonIsClean = nestedButtons.count == 1
+            && firstGroup.map { role($0) == kAXGroupRole as String } == true
+            && firstGroup.map { identifier($0) == nil } == true
+            && secondGroup.map { role($0) == kAXGroupRole as String } == true
+            && secondGroup.map { identifier($0) == nil } == true
+            && secondGroup.map { self.children($0).isEmpty } == true
+        let composerScrolls = children.filter {
+            role($0) == kAXScrollAreaRole as String && identifier($0) == "_NS:47"
+        }
+        let composerChild = composerScrolls.first.flatMap { self.children($0).only }
+        return CompositionWindowValidator.isClean(CompositionWindowEvidence(
+            directChildCount: children.count,
+            identifiedDirectChildren: identifiedDirectChildren,
+            identifierlessButtonCount: identifierlessButtons.count,
+            fixedLeavesAreEmpty: fixedLeaves.count == 6
+                && fixedLeaves.allSatisfy({ self.children($0).isEmpty }),
+            sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
+            emptyIdentifierlessButtonCount: emptyButtons.count,
+            nestedIdentifierlessButtonCount: nestedButtons.count,
+            nestedButtonHasTwoEmptyGroups: nestedButtonIsClean,
+            composerScrollCount: composerScrolls.count,
+            composerIsOnlyScrollChild: composerChild.map({ CFEqual($0, composer) }) == true,
+            composerIsLeaf: self.children(composer).isEmpty
+        ))
+    }
+
+    static func sameElementSet(_ lhs: [AXUIElement], _ rhs: [AXUIElement]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return lhs.allSatisfy { candidate in
+            rhs.filter { CFEqual(candidate, $0) }.count == 1
+        } && rhs.allSatisfy { candidate in
+            lhs.filter { CFEqual(candidate, $0) }.count == 1
+        }
+    }
+
     private static func isChatListRow(_ row: AXUIElement) -> Bool {
         let elements = descendants(row, matching: { _ in true })
         let names = elements.filter {
@@ -185,4 +309,8 @@ enum AXHelpers {
             )
         )
     }
+}
+
+private extension Array {
+    var only: Element? { count == 1 ? self[0] : nil }
 }

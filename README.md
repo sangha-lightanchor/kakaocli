@@ -5,10 +5,13 @@ KakaoTalk history access, fail-closed sending, allowlisted archiving, and an
 optional persistent Unix-socket service.
 
 It is not a Kakao network API. KakaoTalk must already be running and its main
-window must already be rendered before a send. The program never launches or
-activates KakaoTalk, raises a window, moves the cursor, or posts global input.
-If the UI cannot prove the exact destination and composer, it stops before
-composing.
+window must already be rendered before a send. The program never launches
+KakaoTalk, raises a window, moves the cursor, or posts global input. When an
+exact target room is not open, a narrowly isolated warm-up may briefly
+activate KakaoTalk, open the database-resolved row's native context menu, invoke
+exactly one Kakao-localized “enter chatroom” item, restore the previous app
+immediately, and verify the exact new room in the background. If any identity
+check fails, it stops without composing or sending.
 
 ## Requirements
 
@@ -50,6 +53,8 @@ required and durably prevents a retry from duplicating an uncertain result.
 
 ```bash
 kakaocli chats --search "Dr. Jo" --json
+kakaocli warmup --chat-id 123456 --json
+kakaocli warmup --self --json
 printf '%s' 'Approved message' | \
   kakaocli send --chat-id 123456 --stdin --request-id "$(uuidgen)" --json
 printf '%s' 'Self-chat acceptance test' | \
@@ -72,20 +77,33 @@ The send transaction holds both the `KakaoClient` actor queue and
 - the current Chats view is jointly proven by KakaoTalk's direct navigation
   controls and one chat-only row schema, even when KakaoTalk does not expose a
   selected-state attribute, and exactly one UI row represents the destination;
-- no unrelated or additional chat-room window is open; one exact target-title
-  room may be reused only with a globally unique database identity, one exact
-  destination row, and one empty composer;
-- the target room is already open—kakaocli never selects/focuses a row or opens
-  a room in the background;
+- every non-main KakaoTalk window is a structurally verified room; unrelated
+  rooms may remain open and must not change, and exactly one target-title room
+  may exist with one empty composer; reuse leaves unrelated drafts untouched,
+  while a foreground warm-up refuses to activate if another room contains a
+  draft or queued/ambiguous composition state;
+- when the target is closed, the separate warm-up phase records the exact prior
+  foreground app, temporarily activates the one verified KakaoTalk process,
+  rechecks the complete window/table/row set around each action, opens only the
+  exact row-bound context menu item, verifies one exact-title room and empty
+  composer, and restores the prior app before the send reservation is created;
 - the same row, room, composer, exact body, foreground application, and one
   exact enabled Send control remain unchanged before AXPress;
 - the exact outgoing UTF-8 bytes appeared after the target chat's database
   high-water mark.
 
-The strict background sender never mutates Accessibility focus or selected
-rows and never creates keyboard/mouse events. If the exact target room is not
-already open, open it manually, leave its composer empty, and switch back to
-your working app before running `send`.
+The strict sender never activates an app, mutates Accessibility focus or
+selected rows, or creates keyboard/mouse events. Temporary activation and the
+exact row-menu opening action exist only in `ForegroundRoomWarmup.swift`, which
+never receives message bytes and cannot discover or invoke a Send control.
+`send` runs the warm-up automatically under the same actor and cross-process
+lock before it snapshots the database high-water mark or reserves the request
+ID.
+
+`warmup` performs the same no-message preparation explicitly. Once opened, a
+room remains reusable while KakaoTalk keeps that window open. Warm-up is needed
+again only after the room is closed or KakaoTalk restarts; callers never need
+to reopen each room manually. There is no `--foreground` mode.
 
 ## Optional service
 
@@ -99,9 +117,10 @@ read-only SQLCipher connection, serializes database and send work through the
 `KakaoClient` actor, and listens on `~/.kakaocli/run/kakaocli.sock` with mode
 `0600`. It verifies the connecting process has the same effective user ID,
 bounds framed requests and concurrent handlers, and holds a lifetime lock so
-only one service instance can own the socket. CLI read/send commands use it
-when available and otherwise open a direct local client using the same send
-lock.
+only one service instance can own the socket. CLI read/warm-up/send commands
+use it when available and otherwise open a direct local client using the same
+send lock. UI commands require local-service protocol v2; restart a service
+started by an older binary before using `warmup` or `send`.
 
 Database and WAL vnode notifications trigger debounced reads; a 60-second
 reconciliation timer covers missed notifications and late local backfills.
@@ -153,6 +172,7 @@ Redirects are rejected so POST bodies and bearer tokens cannot cross origins.
 ```swift
 let client = try KakaoClient.live()
 let chats = try await client.listChats(search: "Dr. Jo")
+let warmup = try await client.warmup(destination: .chatID(ChatID(rawValue: 123456)))
 let receipt = try await client.send(SendRequest(
     requestID: UUID(),
     destination: .chatID(ChatID(rawValue: 123456)),
@@ -161,8 +181,9 @@ let receipt = try await client.send(SendRequest(
 let stream = await client.events()
 ```
 
-The core types are `ChatID`, `SendDestination`, `SendRequest`, `SendStatus`,
-`SendReceipt`, `KakaoEvent`, and `ArchiveStatus`.
+The core types are `ChatID`, `SendDestination`, `RoomWarmupStatus`,
+`RoomWarmupReceipt`, `SendRequest`, `SendStatus`, `SendReceipt`, `KakaoEvent`,
+and `ArchiveStatus`.
 
 ## Legacy local import
 

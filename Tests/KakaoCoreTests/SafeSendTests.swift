@@ -1,3 +1,4 @@
+import ApplicationServices
 import CryptoKit
 import Foundation
 import Testing
@@ -127,30 +128,59 @@ struct SafeSendTests {
         }
     }
 
-    @Test("rejects stale or unrelated windows")
-    func staleWindows() throws {
-        #expect(throws: SendUIError.self) {
-            try SendUIValidator.preparation(
-                expectedTitle: "Exact Room",
-                openRooms: [OpenRoomEvidence(title: "Other Room", composerCount: 1, composerText: "")],
-                matchingRowCount: 1
-            )
-        }
+    @Test("clean composition fingerprint rejects queued and nested state")
+    func cleanCompositionFingerprint() {
+        #expect(CompositionWindowValidator.isClean(cleanCompositionEvidence()))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            directChildCount: 21
+        )))
+
+        var duplicateIdentifiers = certifiedCompositionElements
+        duplicateIdentifiers[0] = duplicateIdentifiers[1]
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            identifiedDirectChildren: duplicateIdentifiers
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            fixedLeavesAreEmpty: false
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            sliderIsClean: false
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            emptyButtonCount: 7,
+            nestedButtonCount: 2
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            nestedButtonIsClean: false
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            composerIsOnlyChild: false
+        )))
+        #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            composerIsLeaf: false
+        )))
+    }
+
+    @Test("allows unrelated verified rooms but keeps exact-target checks")
+    func multipleRooms() throws {
+        #expect(try SendUIValidator.preparation(
+            expectedTitle: "Exact Room",
+            openRooms: [OpenRoomEvidence(title: "Other Room", composerCount: 1, composerText: "draft")],
+            matchingRowCount: 1
+        ) == .openExactRow)
         #expect(try SendUIValidator.preparation(
             expectedTitle: "Exact Room",
             openRooms: [OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: "")],
             matchingRowCount: 1
         ) == .reuse)
-        #expect(throws: SendUIError.self) {
-            try SendUIValidator.preparation(
-                expectedTitle: "Exact Room",
-                openRooms: [
-                    OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: ""),
-                    OpenRoomEvidence(title: "Other Room", composerCount: 1, composerText: ""),
-                ],
-                matchingRowCount: 1
-            )
-        }
+        #expect(try SendUIValidator.preparation(
+            expectedTitle: "Exact Room",
+            openRooms: [
+                OpenRoomEvidence(title: "Exact Room", composerCount: 1, composerText: ""),
+                OpenRoomEvidence(title: "Other Room", composerCount: 1, composerText: "draft"),
+            ],
+            matchingRowCount: 1
+        ) == .reuse)
     }
 
     @Test("rejects duplicate UI labels")
@@ -284,6 +314,178 @@ struct SafeSendTests {
         #expect(database.confirmationBody == Data("byte-exact 🫧".utf8))
         #expect(database.confirmationAfter == 8)
         #expect(ui.calls == 1)
+    }
+
+    @Test("automatic warm-up completes before reservation and submit")
+    func automaticWarmupOrdering() throws {
+        let database = MockDatabase(chat: target)
+        database.confirmedLogID = 109
+        let state = MockState()
+        let ui = MockUI()
+        let request = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "after warm-up"
+        )
+        ui.onPrepare = {
+            let attempt = try state.sendAttempt(requestID: request.requestID)
+            #expect(attempt == nil)
+        }
+        ui.onSubmit = {
+            let attempt = try state.sendAttempt(requestID: request.requestID)
+            #expect(attempt != nil)
+        }
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+
+        #expect(try coordinator.send(request).status == .confirmed)
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 1)
+    }
+
+    @Test("standalone warm-up writes no send state and never submits")
+    func standaloneWarmupIsNoSend() throws {
+        let state = MockState()
+        let ui = MockUI()
+        ui.warmupStatus = .opened
+        let coordinator = SafeSendCoordinator(
+            database: MockDatabase(chat: target),
+            state: state,
+            ui: ui,
+            roomPreparer: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+
+        let receipt = try coordinator.warmup(.chatID(target.id))
+        #expect(receipt == RoomWarmupReceipt(chatID: target.id, status: .opened))
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 0)
+        #expect(state.attemptCount == 0)
+    }
+
+    @Test("database identity drift after warm-up blocks reservation and submit")
+    func warmupIdentityDrift() throws {
+        let database = MockDatabase(chat: target)
+        let state = MockState()
+        let ui = MockUI()
+        ui.onPrepare = {
+            database.resolvedChat = Chat(
+                id: self.target.id,
+                type: self.target.type,
+                displayName: "Renamed Room",
+                memberCount: self.target.memberCount,
+                lastMessageId: self.target.lastMessageId,
+                lastMessageAt: self.target.lastMessageAt,
+                unreadCount: self.target.unreadCount
+            )
+        }
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            roomPreparer: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "identity changed"
+        )
+
+        #expect(throws: KakaoClientError.self) { try coordinator.send(request) }
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 0)
+        #expect(state.attemptCount == 0)
+    }
+
+    @Test("database identity drift at the final UI boundary clears the reservation")
+    func finalIdentityDrift() throws {
+        let database = MockDatabase(chat: target)
+        let state = MockState()
+        let ui = MockUI()
+        ui.onBeforeFinalIdentityCheck = {
+            database.resolvedChat = Chat(
+                id: self.target.id,
+                type: self.target.type,
+                displayName: "Last-Moment Rename",
+                memberCount: self.target.memberCount,
+                lastMessageId: self.target.lastMessageId,
+                lastMessageAt: self.target.lastMessageAt,
+                unreadCount: self.target.unreadCount
+            )
+        }
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            roomPreparer: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "final drift"
+        )
+
+        #expect(throws: KakaoClientError.self) { try coordinator.send(request) }
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 1)
+        #expect(state.attemptCount == 0)
+    }
+
+    @Test("stored requests reconcile without warming a room")
+    func storedRequestSkipsWarmup() throws {
+        let database = MockDatabase(chat: target)
+        let state = MockState()
+        let ui = MockUI()
+        let coordinator = SafeSendCoordinator(
+            database: database,
+            state: state,
+            ui: ui,
+            roomPreparer: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "stored"
+        )
+        #expect(try coordinator.send(request).status == .unknown)
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 1)
+        #expect(try coordinator.send(request).status == .unknown)
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 1)
+    }
+
+    @Test("warm-up failure is retry-safe and creates no reservation")
+    func warmupFailureCreatesNoReservation() throws {
+        let state = MockState()
+        let ui = MockUI()
+        ui.prepareError = .preconditionFailed("activation changed")
+        let coordinator = SafeSendCoordinator(
+            database: MockDatabase(chat: target),
+            state: state,
+            ui: ui,
+            roomPreparer: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "never composed"
+        )
+
+        #expect(throws: KakaoClientError.self) { try coordinator.send(request) }
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 0)
+        #expect(state.attemptCount == 0)
     }
 
     @Test("an unknown outcome is durable and never retries the UI")
@@ -681,6 +883,7 @@ struct SafeSendTests {
 
 private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
     let target: Chat
+    var resolvedChat: Chat
     var confirmedLogID: Int64?
     var confirmationChat: ChatID?
     var confirmationBody: Data?
@@ -689,10 +892,13 @@ private final class MockDatabase: KakaoDatabaseAccess, @unchecked Sendable {
     var confirmationError: Error?
     var uiIdentityCount = 1
 
-    init(chat: Chat) { target = chat }
-    func chats(limit: Int) throws -> [Chat] { [target] }
-    func chat(id: ChatID) throws -> Chat? { id == target.id ? target : nil }
-    func selfChat() throws -> Chat? { target.isSelfChat ? target : nil }
+    init(chat: Chat) {
+        target = chat
+        resolvedChat = chat
+    }
+    func chats(limit: Int) throws -> [Chat] { [resolvedChat] }
+    func chat(id: ChatID) throws -> Chat? { id == resolvedChat.id ? resolvedChat : nil }
+    func selfChat() throws -> Chat? { resolvedChat.isSelfChat ? resolvedChat : nil }
     func chatUIIdentityCount(displayName: String) throws -> Int { uiIdentityCount }
     func messages(chatID: ChatID?, since: Date?, limit: Int) throws -> [Message] { [] }
     func maxLogID(chatID: ChatID?) throws -> Int64 { 8 }
@@ -712,6 +918,11 @@ private final class MockState: SendStateStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var attempts: [UUID: StoredSendAttempt] = [:]
     private var logOwners: [Int64: UUID] = [:]
+    var attemptCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return attempts.count
+    }
     func sendAttempt(requestID: UUID) throws -> StoredSendAttempt? {
         lock.lock()
         defer { lock.unlock() }
@@ -765,11 +976,38 @@ private final class MockState: SendStateStoring, @unchecked Sendable {
     }
 }
 
-private final class MockUI: KakaoSendUI, @unchecked Sendable {
+private final class MockUI: KakaoSendUI, KakaoRoomPreparing,
+    KakaoIdentityRecheckingSendUI, @unchecked Sendable {
     var calls = 0
+    var prepareCalls = 0
     var error: SendUIError?
+    var prepareError: SendUIError?
+    var warmupStatus: RoomWarmupStatus = .alreadyOpen
+    var onPrepare: (() throws -> Void)?
     var onSubmit: (() throws -> Void)?
+    var onBeforeFinalIdentityCheck: (() throws -> Void)?
+    func prepare(chat: Chat) throws -> RoomWarmupStatus {
+        prepareCalls += 1
+        try onPrepare?()
+        if let prepareError { throw prepareError }
+        return warmupStatus
+    }
     func submit(chat: Chat, body: String) throws {
+        try recordSubmit()
+    }
+    func submit(
+        chat: Chat,
+        body: String,
+        finalIdentityCheck: () throws -> Void
+    ) throws {
+        calls += 1
+        try onSubmit?()
+        try onBeforeFinalIdentityCheck?()
+        do { try finalIdentityCheck() }
+        catch { throw SendUIError.preconditionFailed("final identity changed") }
+        if let error { throw error }
+    }
+    private func recordSubmit() throws {
         calls += 1
         try onSubmit?()
         if let error { throw error }
@@ -779,4 +1017,42 @@ private final class MockUI: KakaoSendUI, @unchecked Sendable {
 private final class MockLock: SendTransactionLocking, @unchecked Sendable {
     func lock() throws {}
     func unlock() {}
+}
+
+private let certifiedCompositionElements = [
+    CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
+    CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
+    CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
+    CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
+]
+
+private func cleanCompositionEvidence(
+    directChildCount: Int = 18,
+    identifiedDirectChildren: [CompositionElementEvidence] = certifiedCompositionElements,
+    fixedLeavesAreEmpty: Bool = true,
+    sliderIsClean: Bool = true,
+    emptyButtonCount: Int = 8,
+    nestedButtonCount: Int = 1,
+    nestedButtonIsClean: Bool = true,
+    composerIsOnlyChild: Bool = true,
+    composerIsLeaf: Bool = true
+) -> CompositionWindowEvidence {
+    CompositionWindowEvidence(
+        directChildCount: directChildCount,
+        identifiedDirectChildren: identifiedDirectChildren,
+        identifierlessButtonCount: emptyButtonCount + nestedButtonCount,
+        fixedLeavesAreEmpty: fixedLeavesAreEmpty,
+        sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
+        emptyIdentifierlessButtonCount: emptyButtonCount,
+        nestedIdentifierlessButtonCount: nestedButtonCount,
+        nestedButtonHasTwoEmptyGroups: nestedButtonIsClean,
+        composerScrollCount: 1,
+        composerIsOnlyScrollChild: composerIsOnlyChild,
+        composerIsLeaf: composerIsLeaf
+    )
 }

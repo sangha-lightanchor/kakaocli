@@ -3,7 +3,7 @@ import Testing
 
 @Suite("Safety source guard")
 struct SafetySourceGuardTests {
-    @Test("active source has no activation, raising, cursor, or global event calls")
+    @Test("restricted warm-up primitives exist only in the dedicated source")
     func forbiddenCalls() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -11,9 +11,12 @@ struct SafetySourceGuardTests {
         let files = FileManager.default.enumerator(at: sourceRoot, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" } ?? []
-        let forbidden = [
-            ".activate(",
+        let warmup = sourceRoot.appendingPathComponent(
+            "KakaoCore/Automation/ForegroundRoomWarmup.swift"
+        ).standardizedFileURL
+        let alwaysForbidden = [
             "activateIgnoringOtherApps",
+            "activateAllWindows",
             "kAXRaiseAction",
             "kAXMainAttribute",
             "kAXFocusedWindowAttribute",
@@ -21,12 +24,29 @@ struct SafetySourceGuardTests {
             "kAXSelectedRowsAttribute",
             "makeKeyAndOrderFront",
             "orderFront",
+            "orderFrontRegardless",
+            "orderWindow",
+            "orderBack",
+            "orderOut",
             "openApplication",
             "launchApplication",
+            "NSWorkspace.shared.open",
+            "/usr/bin/open",
+            "NSAppleScript",
+            "osascript",
+            "SetFrontProcess",
+            "TransformProcessType",
+            "AXRaise",
             "CGWarpMouseCursorPosition",
             "CGDisplayMoveCursorToPoint",
             "CGAssociateMouseAndMouseCursorPosition",
             "CGEventTapPostEvent",
+            "CGEventPost(",
+            "CGEventPostToPid(",
+            "CGEventPostToPSN(",
+            "CGPostKeyboardEvent(",
+            "CGPostMouseEvent(",
+            "AXUIElementPostKeyboardEvent(",
             "CGEvent(",
             "postToPid(",
             ".post(tap:",
@@ -38,11 +58,65 @@ struct SafetySourceGuardTests {
             "LocalAuthentication",
             "SecItem",
         ]
+        let warmupOnly = [
+            ".activate(",
+        ]
         for file in files {
             let contents = try String(contentsOf: file, encoding: .utf8)
-            for token in forbidden {
+            for token in alwaysForbidden {
                 #expect(!contents.contains(token), "Forbidden token \(token) in \(file.lastPathComponent)")
             }
+            if file.standardizedFileURL != warmup {
+                for token in warmupOnly {
+                    #expect(!contents.contains(token), "Warm-up token \(token) escaped into \(file.path)")
+                }
+            }
+        }
+
+        let contents = try String(contentsOf: warmup, encoding: .utf8)
+        #expect(contents.components(separatedBy: ".activate(").count - 1 == 2)
+        #expect(contents.components(separatedBy: "AXHelpers.perform(").count - 1 == 3)
+        #expect(contents.components(separatedBy: "kAXShowMenuAction").count - 1 == 2)
+        #expect(contents.components(separatedBy: "kAXPressAction").count - 1 == 2)
+        #expect(contents.components(separatedBy: "kAXCancelAction").count - 1 == 2)
+        #expect(contents.contains("kakao.application.activate(from: prior.application, options: [])"))
+        #expect(contents.contains("prior.application.activate(from: kakao.application, options: [])"))
+        #expect(contents.contains("AXHelpers.perform(rowCell, kAXShowMenuAction as String)"))
+        #expect(contents.contains("AXHelpers.perform(openItem, kAXPressAction as String)"))
+        #expect(contents.contains("ChatTab_Rightclick_GoChatRoom"))
+        #expect(contents.contains("bundle.localizedString("))
+        #expect(!contents.contains("for localization in bundle.localizations"))
+        #expect(contents.contains("application.isActive"))
+        #expect(contents.contains("baseline.rooms.allSatisfy({ room in"))
+        #expect(contents.contains("AXHelpers.isCleanCompositionRoom(room.window, composer: room.composer)"))
+        let foregroundOrder = [
+            "kakao.application.activate(from: prior.application, options: [])",
+            "waitForFrontmost(kakao",
+            "return try openExactRoom(",
+            "restore(prior: prior, from: kakao)",
+        ]
+        let menuOrder = [
+            "AXHelpers.perform(rowCell, kAXShowMenuAction as String)",
+            "waitForNewMenu(",
+            "AXHelpers.perform(openItem, kAXPressAction as String)",
+            "waitForExactNewRoom(",
+        ]
+        for orderedTokens in [foregroundOrder, menuOrder] {
+            var lowerBound = contents.startIndex
+            for token in orderedTokens {
+                guard let range = contents.range(of: token, range: lowerBound..<contents.endIndex) else {
+                    Issue.record("Warm-up ordering token is missing: \(token)")
+                    return
+                }
+                lowerBound = range.upperBound
+            }
+        }
+        for token in [
+            "AXHelpers.setValue", "AXUIElementSetAttributeValue", "AXUIElementPerformAction",
+            "kAXValueAttribute", "sendControlCandidates", "SendRequest", "CGEvent",
+            "postToPid", "keyboardSetUnicodeString", "setIntegerValueField", ".flags"
+        ] {
+            #expect(!contents.contains(token), "Warm-up source contains delivery capability \(token)")
         }
     }
 
@@ -51,13 +125,74 @@ struct SafetySourceGuardTests {
         let testFile = URL(fileURLWithPath: #filePath)
         let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let sender = root.appendingPathComponent("Sources/KakaoCore/Automation/SafeKakaoSender.swift")
+        let helpers = root.appendingPathComponent("Sources/KakaoCore/Automation/AXHelpers.swift")
         let contents = try String(contentsOf: sender, encoding: .utf8)
+        let helperContents = try String(contentsOf: helpers, encoding: .utf8)
         #expect(contents.contains("sendControlCandidates(in: room)"))
+        #expect(contents.contains("return AXHelpers.children(room).filter"))
         #expect(contents.contains("AXHelpers.perform(control, kAXPressAction"))
-        #expect(contents.contains("The exact target room is not already open"))
-        for forbidden in ["kAXFocusedAttribute", "kAXSelectedRowsAttribute", "CGEvent(", "postToPid("] {
+        #expect(contents.contains("run the exact-ID room warm-up"))
+        #expect(contents.contains("AXHelpers.isCleanCompositionRoom(room, composer: composer)"))
+        #expect(contents.contains("guard evidence.directChildCount == 18"))
+        for identifier in [
+            "_NS:29", "_NS:164", "_NS:144", "_NS:10", "_NS:30",
+            "_NS:42", "_NS:78", "_NS:182", "_NS:47",
+        ] {
+            #expect(contents.contains(identifier), "Missing clean-composer identifier \(identifier)")
+        }
+        #expect(contents.contains("evidence.identifierlessButtonCount == 9"))
+        #expect(contents.contains("evidence.emptyIdentifierlessButtonCount == 8"))
+        #expect(contents.contains("evidence.nestedIdentifierlessButtonCount == 1"))
+        #expect(contents.contains("evidence.composerIsLeaf"))
+        #expect(helperContents.contains("nestedButtonIsClean"))
+        #expect(helperContents.contains("composerChild.map({ CFEqual($0, composer) }) == true"))
+        #expect(contents.contains("AXHelpers.identifier(element) == nil"))
+        #expect(contents.contains("kAXHiddenAttribute as String) != true"))
+        #expect(contents.contains("AXHelpers.hasContainedFrame(element, in: room)"))
+        #expect(contents.contains("if !actionAttempted, composerMutationAttempted"))
+        #expect(contents.contains("if currentValue == body"))
+        #expect(!contents.contains("currentValue?.isEmpty == true"))
+        #expect(!contents.contains("public final class SafeKakaoSender"))
+        #expect(!contents.contains("public func submit(chat: Chat, body: String)"))
+        for forbidden in [".activate(", "kAXFocusedAttribute", "kAXSelectedRowsAttribute", "CGEvent(", "postToPid(", "kAXShowMenuAction"] {
             #expect(!contents.contains(forbidden), "Background sender contains \(forbidden)")
         }
+    }
+
+    @Test("Accessibility mutations remain closed over exact call sites")
+    func accessibilityMutationCallSites() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let sourceRoot = root.appendingPathComponent("Sources")
+        let helpers = sourceRoot.appendingPathComponent("KakaoCore/Automation/AXHelpers.swift")
+        let sender = sourceRoot.appendingPathComponent("KakaoCore/Automation/SafeKakaoSender.swift")
+        let warmup = sourceRoot.appendingPathComponent("KakaoCore/Automation/ForegroundRoomWarmup.swift")
+        let files = FileManager.default.enumerator(at: sourceRoot, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" } ?? []
+
+        let helperContents = try String(contentsOf: helpers, encoding: .utf8)
+        #expect(helperContents.components(separatedBy: "AXUIElementPerformAction(").count - 1 == 1)
+        #expect(helperContents.components(separatedBy: "AXUIElementSetAttributeValue(").count - 1 == 1)
+        for file in files where file.standardizedFileURL != helpers.standardizedFileURL {
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            #expect(!contents.contains("AXUIElementPerformAction("))
+            #expect(!contents.contains("AXUIElementSetAttributeValue("))
+        }
+
+        let warmupContents = try String(contentsOf: warmup, encoding: .utf8)
+        #expect(warmupContents.components(separatedBy: "AXHelpers.perform(").count - 1 == 3)
+        let senderContents = try String(contentsOf: sender, encoding: .utf8)
+        #expect(senderContents.components(separatedBy: "AXHelpers.perform(").count - 1 == 1)
+        #expect(senderContents.components(separatedBy: "AXHelpers.setValue(").count - 1 == 2)
+        for file in files where ![warmup, sender].map(\.standardizedFileURL).contains(file.standardizedFileURL) {
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            #expect(!contents.contains("AXHelpers.perform("))
+            #expect(!contents.contains("AXHelpers.setValue("))
+        }
+        #expect(senderContents.contains("AXHelpers.setValue(composer, body)"))
+        #expect(senderContents.contains("AXHelpers.setValue(composer, \"\")"))
+        #expect(senderContents.contains("AXHelpers.perform(control, kAXPressAction as String)"))
     }
 
     @Test("state-key storage remains prompt-free and fail-closed")

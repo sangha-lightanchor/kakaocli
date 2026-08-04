@@ -5,6 +5,7 @@ public final class SafeSendCoordinator: @unchecked Sendable {
     private let database: KakaoDatabaseAccess
     private let state: SendStateStoring
     private let ui: KakaoSendUI
+    private let roomPreparer: KakaoRoomPreparing?
     private let transactionLock: SendTransactionLocking
     private let confirmationAttempts: Int
     private let confirmationDelay: TimeInterval
@@ -13,6 +14,7 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         database: KakaoDatabaseAccess,
         state: SendStateStoring,
         ui: KakaoSendUI,
+        roomPreparer: KakaoRoomPreparing? = nil,
         transactionLock: SendTransactionLocking,
         confirmationAttempts: Int = 120,
         confirmationDelay: TimeInterval = 0.1
@@ -20,6 +22,9 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         self.database = database
         self.state = state
         self.ui = ui
+        // Existing callers that pass a dual-purpose transport keep automatic
+        // warm-up without needing to adopt a new initializer argument.
+        self.roomPreparer = roomPreparer ?? (ui as? KakaoRoomPreparing)
         self.transactionLock = transactionLock
         self.confirmationAttempts = max(1, confirmationAttempts)
         self.confirmationDelay = max(0, confirmationDelay)
@@ -64,25 +69,22 @@ public final class SafeSendCoordinator: @unchecked Sendable {
             return stored.receipt
         }
 
-        let chat: Chat
-        switch request.destination {
-        case .chatID(let id):
-            guard let resolved = try database.chat(id: id) else {
-                throw KakaoClientError.chatNotFound(id)
+        let initialChat = try resolveVerifiedChat(request.destination)
+        if let roomPreparer {
+            do {
+                _ = try roomPreparer.prepare(chat: initialChat)
+            } catch let error as SendUIError {
+                throw KakaoClientError.uiPrecondition(error.description)
+            } catch {
+                throw KakaoClientError.uiPrecondition(
+                    "Room warm-up failed before any message was composed or sent"
+                )
             }
-            chat = resolved
-        case .selfChat:
-            guard let resolved = try database.selfChat() else {
-                throw KakaoClientError.selfChatNotFound
-            }
-            chat = resolved
         }
-        guard chat.displayName != "(unknown)" else {
-            throw KakaoClientError.uiPrecondition("Chat ID \(chat.id) has no provable UI identity")
-        }
-        guard try database.chatUIIdentityCount(displayName: chat.displayName) == 1 else {
+        let chat = try resolveVerifiedChat(request.destination)
+        guard hasSameUIIdentity(chat, initialChat) else {
             throw KakaoClientError.uiPrecondition(
-                "Chat ID \(chat.id) does not have a database-unique UI identity"
+                "The destination database identity changed during room warm-up"
             )
         }
 
@@ -104,7 +106,18 @@ public final class SafeSendCoordinator: @unchecked Sendable {
             receipt: provisional
         )
         do {
-            try ui.submit(chat: chat, body: request.body)
+            if let recheckingUI = ui as? KakaoIdentityRecheckingSendUI {
+                try recheckingUI.submit(chat: chat, body: request.body) { [self] in
+                    let current = try resolveVerifiedChat(request.destination)
+                    guard hasSameUIIdentity(current, chat) else {
+                        throw KakaoClientError.uiPrecondition(
+                            "The destination database identity changed before Send"
+                        )
+                    }
+                }
+            } else {
+                try ui.submit(chat: chat, body: request.body)
+            }
         } catch let error as SendUIError {
             switch error {
             case .preconditionFailed(let message):
@@ -158,5 +171,63 @@ public final class SafeSendCoordinator: @unchecked Sendable {
             }
         }
         return provisional
+    }
+
+    public func warmup(_ destination: SendDestination) throws -> RoomWarmupReceipt {
+        try transactionLock.lock()
+        defer { transactionLock.unlock() }
+
+        let chat = try resolveVerifiedChat(destination)
+        guard let roomPreparer else {
+            throw KakaoClientError.uiPrecondition("This client has no room warm-up transport")
+        }
+        do {
+            let status = try roomPreparer.prepare(chat: chat)
+            let current = try resolveVerifiedChat(destination)
+            guard hasSameUIIdentity(current, chat) else {
+                throw KakaoClientError.uiPrecondition(
+                    "The destination database identity changed during room warm-up"
+                )
+            }
+            return RoomWarmupReceipt(chatID: current.id, status: status)
+        } catch let error as SendUIError {
+            throw KakaoClientError.uiPrecondition(error.description)
+        } catch {
+            throw KakaoClientError.uiPrecondition(
+                "Room warm-up failed before any message was composed or sent"
+            )
+        }
+    }
+
+    private func resolveVerifiedChat(_ destination: SendDestination) throws -> Chat {
+        let chat: Chat
+        switch destination {
+        case .chatID(let id):
+            guard let resolved = try database.chat(id: id) else {
+                throw KakaoClientError.chatNotFound(id)
+            }
+            chat = resolved
+        case .selfChat:
+            guard let resolved = try database.selfChat() else {
+                throw KakaoClientError.selfChatNotFound
+            }
+            chat = resolved
+        }
+        guard chat.displayName != "(unknown)" else {
+            throw KakaoClientError.uiPrecondition("Chat ID \(chat.id) has no provable UI identity")
+        }
+        guard try database.chatUIIdentityCount(displayName: chat.displayName) == 1 else {
+            throw KakaoClientError.uiPrecondition(
+                "Chat ID \(chat.id) does not have a database-unique UI identity"
+            )
+        }
+        return chat
+    }
+
+    private func hasSameUIIdentity(_ lhs: Chat, _ rhs: Chat) -> Bool {
+        lhs.id == rhs.id
+            && lhs.displayName == rhs.displayName
+            && lhs.type == rhs.type
+            && lhs.isSelfChat == rhs.isSelfChat
     }
 }

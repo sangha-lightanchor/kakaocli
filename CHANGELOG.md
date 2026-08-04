@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.9 — Stable background restoration
+
+- Recheck and, when KakaoTalk reacquires the foreground while an exact room
+  finishes opening, re-restore the same verified prior application before any
+  message bytes can enter a composer.
+- Use the normal bounded AppKit activation request that a CLI can issue; the
+  cooperative source-app API requires the foreground app to yield first and
+  was rejected without opening a room.
+- Bind the sender to the foreground process recorded by room preparation so a
+  delayed focus change fails before composition.
+- Track unrelated background rooms by their stable window, title, and composer
+  identities without requiring macOS to expose a transient empty `AXValue`.
+- Preserve strict empty/clean composer checks for the target and for every room
+  before the only permitted temporary-activation path.
+
 ## 1.0.8 — Dynamic chat-preview compatibility
 
 - Restore background exact-row verification for current KakaoTalk chat lists

@@ -189,6 +189,41 @@ struct SafeSendTests {
         ) == .reuse)
     }
 
+    @Test("unrelated rooms are bound by identity without requiring a readable value")
+    func unrelatedRoomIdentity() {
+        #expect(UnrelatedRoomIdentityValidator.isStable(
+            UnrelatedRoomIdentityEvidence(
+                titleUnchanged: true,
+                composerCount: 1,
+                composerIdentityMatches: true
+            )
+        ))
+        for evidence in [
+            UnrelatedRoomIdentityEvidence(
+                titleUnchanged: false,
+                composerCount: 1,
+                composerIdentityMatches: true
+            ),
+            UnrelatedRoomIdentityEvidence(
+                titleUnchanged: true,
+                composerCount: 0,
+                composerIdentityMatches: false
+            ),
+            UnrelatedRoomIdentityEvidence(
+                titleUnchanged: true,
+                composerCount: 2,
+                composerIdentityMatches: true
+            ),
+            UnrelatedRoomIdentityEvidence(
+                titleUnchanged: true,
+                composerCount: 1,
+                composerIdentityMatches: false
+            ),
+        ] {
+            #expect(!UnrelatedRoomIdentityValidator.isStable(evidence))
+        }
+    }
+
     @Test("rejects duplicate UI labels")
     func duplicateRows() throws {
         #expect(throws: SendUIError.self) {

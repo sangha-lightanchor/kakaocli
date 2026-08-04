@@ -128,6 +128,20 @@ public struct FinalRoomEvidence: Sendable, Equatable {
     }
 }
 
+struct UnrelatedRoomIdentityEvidence: Sendable {
+    let titleUnchanged: Bool
+    let composerCount: Int
+    let composerIdentityMatches: Bool
+}
+
+enum UnrelatedRoomIdentityValidator {
+    static func isStable(_ evidence: UnrelatedRoomIdentityEvidence) -> Bool {
+        evidence.titleUnchanged
+            && evidence.composerCount == 1
+            && evidence.composerIdentityMatches
+    }
+}
+
 struct CompositionElementEvidence: Hashable, Sendable {
     let role: String
     let identifier: String
@@ -309,7 +323,6 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         let window: AXUIElement
         let title: String
         let composer: AXUIElement
-        let value: String
     }
 
     init() {}
@@ -359,6 +372,11 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         let processID = application.processIdentifier
         guard let initialFrontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
             throw SendUIError.preconditionFailed("The current foreground application could not be verified")
+        }
+        guard initialFrontmostProcessID == prepared.foregroundProcessID else {
+            throw SendUIError.preconditionFailed(
+                "The foreground application changed after exact-room warm-up"
+            )
         }
         let appElement = AXUIElementCreateApplication(processID)
         let windows = AXHelpers.windows(appElement)
@@ -413,19 +431,17 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         }
         let unrelatedRooms = roomWindows.filter { AXHelpers.title($0) != expectedTitle }
         let unrelatedSnapshots = unrelatedRooms.compactMap { window -> UnrelatedRoomSnapshot? in
-            guard let composer = AXHelpers.composerCandidates(in: window).first,
-                  let value = AXHelpers.value(composer) else { return nil }
+            guard let composer = AXHelpers.composerCandidates(in: window).first else { return nil }
             guard let title = AXHelpers.title(window) else { return nil }
             return UnrelatedRoomSnapshot(
                 window: window,
                 title: title,
-                composer: composer,
-                value: value
+                composer: composer
             )
         }
         guard unrelatedSnapshots.count == unrelatedRooms.count else {
             throw SendUIError.preconditionFailed(
-                "An unrelated room composer could not be stably snapshotted"
+                "An unrelated room identity could not be stably snapshotted"
             )
         }
 
@@ -682,10 +698,15 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
     private func unrelatedRoomsAreUnchanged(_ snapshots: [UnrelatedRoomSnapshot]) -> Bool {
         snapshots.allSatisfy { snapshot in
             let composers = AXHelpers.composerCandidates(in: snapshot.window)
-            return AXHelpers.title(snapshot.window) == snapshot.title
-                && composers.count == 1
-                && composers.first.map { CFEqual($0, snapshot.composer) } == true
-                && AXHelpers.value(snapshot.composer) == snapshot.value
+            return UnrelatedRoomIdentityValidator.isStable(
+                UnrelatedRoomIdentityEvidence(
+                    titleUnchanged: AXHelpers.title(snapshot.window) == snapshot.title,
+                    composerCount: composers.count,
+                    composerIdentityMatches: composers.first.map {
+                        CFEqual($0, snapshot.composer)
+                    } == true
+                )
+            )
         }
     }
 

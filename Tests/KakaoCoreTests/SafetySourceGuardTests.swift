@@ -79,8 +79,8 @@ struct SafetySourceGuardTests {
         #expect(contents.components(separatedBy: "kAXShowMenuAction").count - 1 == 2)
         #expect(contents.components(separatedBy: "kAXPressAction").count - 1 == 2)
         #expect(contents.components(separatedBy: "kAXCancelAction").count - 1 == 2)
-        #expect(contents.contains("kakao.application.activate(from: prior.application, options: [])"))
-        #expect(contents.contains("prior.application.activate(from: kakao.application, options: [])"))
+        #expect(contents.contains("kakao.application.activate(options: [])"))
+        #expect(contents.contains("prior.application.activate(options: [])"))
         #expect(contents.contains("AXHelpers.perform(rowCell, kAXShowMenuAction as String)"))
         #expect(contents.contains("AXHelpers.perform(openItem, kAXPressAction as String)"))
         #expect(contents.contains("ChatTab_Rightclick_GoChatRoom"))
@@ -89,8 +89,11 @@ struct SafetySourceGuardTests {
         #expect(contents.contains("application.isActive"))
         #expect(contents.contains("baseline.rooms.allSatisfy({ room in"))
         #expect(contents.contains("AXHelpers.isCleanCompositionRoom(room.window, composer: room.composer)"))
+        #expect(contents.components(separatedBy: "restore(prior: prior, from: kakao)").count - 1 == 2)
+        #expect(contents.contains("verifyOpenedRoomAfterRestoration("))
+        #expect(contents.contains("activationAttempts < 3"))
         let foregroundOrder = [
-            "kakao.application.activate(from: prior.application, options: [])",
+            "kakao.application.activate(options: [])",
             "waitForFrontmost(kakao",
             "return try openExactRoom(",
             "restore(prior: prior, from: kakao)",
@@ -154,6 +157,9 @@ struct SafetySourceGuardTests {
         #expect(contents.contains("AXHelpers.hasContainedFrame(element, in: room)"))
         #expect(contents.contains("if !actionAttempted, composerMutationAttempted"))
         #expect(contents.contains("if currentValue == body"))
+        #expect(contents.contains("initialFrontmostProcessID == prepared.foregroundProcessID"))
+        #expect(contents.contains("UnrelatedRoomIdentityValidator.isStable("))
+        #expect(!contents.contains("AXHelpers.value(snapshot.composer)"))
         #expect(!contents.contains("currentValue?.isEmpty == true"))
         #expect(!contents.contains("public final class SafeKakaoSender"))
         #expect(!contents.contains("public func submit(chat: Chat, body: String)"))

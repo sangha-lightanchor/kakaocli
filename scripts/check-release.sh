@@ -69,12 +69,14 @@ for foreground_source in "${foreground_sources[@]}"; do
   fi
 done
 for warmup_guard in \
-  'kakao.application.activate(from: prior.application, options: [])' \
-  'prior.application.activate(from: kakao.application, options: [])' \
+  'kakao.application.activate(options: [])' \
+  'prior.application.activate(options: [])' \
   'AXHelpers.perform(rowCell, kAXShowMenuAction as String)' \
   'AXHelpers.perform(openItem, kAXPressAction as String)' \
   'baseline.rooms.allSatisfy({ room in' \
   'AXHelpers.isCleanCompositionRoom(room.window, composer: room.composer)' \
+  'verifyOpenedRoomAfterRestoration(' \
+  'activationAttempts < 3' \
   'bundle.localizedString(' \
   'ChatTab_Rightclick_GoChatRoom'; do
   if ! rg -q --fixed-strings "$warmup_guard" "$warmup_source"; then
@@ -84,6 +86,10 @@ for warmup_guard in \
 done
 if rg -n --fixed-strings 'for localization in bundle.localizations' "$warmup_source"; then
   print -u2 'warm-up accepts inactive localization menu titles'
+  exit 1
+fi
+if [[ "$(rg -o --fixed-strings 'restore(prior: prior, from: kakao)' "$warmup_source" | wc -l | tr -d ' ')" != 2 ]]; then
+  print -u2 'warm-up must restore before and after asynchronous room-open verification'
   exit 1
 fi
 if [[ "$(rg -o --fixed-strings '.activate(' "$warmup_source" | wc -l | tr -d ' ')" != 2 ]] || \
@@ -121,6 +127,8 @@ if ! rg -q --fixed-strings 'identifier(element) == "_NS:87"' "$helpers_source" |
 fi
 for sender_guard in \
   'AXHelpers.isCleanCompositionRoom(room, composer: composer)' \
+  'initialFrontmostProcessID == prepared.foregroundProcessID' \
+  'UnrelatedRoomIdentityValidator.isStable(' \
   'let controls = waitForExactSendControls(' \
   'timeout: 2' \
   'return AXHelpers.children(room).filter'; do
@@ -129,6 +137,10 @@ for sender_guard in \
     exit 1
   fi
 done
+if rg -n --fixed-strings 'AXHelpers.value(snapshot.composer)' "$sender_source"; then
+  print -u2 'unrelated background rooms must be identity-bound without requiring transient AXValue text'
+  exit 1
+fi
 for composition_guard in \
   'fixedLeaves.count == 5' \
   'sliderIsClean' \

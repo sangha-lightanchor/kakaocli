@@ -13,6 +13,7 @@ struct PreparedRoomWarmup {
     let processID: pid_t
     let bundleIdentifier: String
     let launchDate: Date
+    let foregroundProcessID: pid_t
 }
 
 struct RoomWarmupMenuEvidence: Sendable {
@@ -122,7 +123,18 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
                     "The target room contains a draft or queued/ambiguous composition state"
                 )
             }
-            return prepared(.alreadyOpen, chat: chat, kakao: kakao)
+            guard let foregroundProcessID = NSWorkspace.shared.frontmostApplication?
+                .processIdentifier else {
+                throw SendUIError.preconditionFailed(
+                    "The current foreground application could not be verified"
+                )
+            }
+            return prepared(
+                .alreadyOpen,
+                chat: chat,
+                kakao: kakao,
+                foregroundProcessID: foregroundProcessID
+            )
         }
         // Temporary activation can redirect a person's physical keystrokes.
         // Do not activate while any existing room holds text that Return could
@@ -161,7 +173,12 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
                 appElement: appElement,
                 baseline: baseline
             )
-            return prepared(status, chat: chat, kakao: kakao)
+            return prepared(
+                status,
+                chat: chat,
+                kakao: kakao,
+                foregroundProcessID: kakao.processID
+            )
         }
 
         guard isExactFrontmost(prior), isCurrentIdentity(prior) else {
@@ -171,7 +188,7 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
         }
 
         let operation: Result<RoomWarmupStatus, Error>
-        if kakao.application.activate(from: prior.application, options: []) {
+        if kakao.application.activate(options: []) {
             operation = Result {
                 guard waitForFrontmost(kakao, allowing: prior, timeout: 2) else {
                     throw SendUIError.preconditionFailed(
@@ -196,20 +213,20 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
         switch (operation, restoration) {
         case (.success(let status), .restored):
             if case .opened = status {
-                try waitForExactNewRoom(
+                try verifyOpenedRoomAfterRestoration(
                     chat: chat,
                     kakao: kakao,
+                    prior: prior,
                     appElement: appElement,
-                    baseline: baseline,
-                    requireKakaoForeground: false
+                    baseline: baseline
                 )
-                guard isExactFrontmost(prior), isCurrentIdentity(prior) else {
-                    throw SendUIError.preconditionFailed(
-                        "The foreground application changed after room restoration"
-                    )
-                }
             }
-            return prepared(status, chat: chat, kakao: kakao)
+            return prepared(
+                status,
+                chat: chat,
+                kakao: kakao,
+                foregroundProcessID: prior.processID
+            )
         case (.success, .superseded):
             throw SendUIError.preconditionFailed(
                 "The foreground application changed during warm-up; the room may be open, but no message was composed or sent"
@@ -230,7 +247,8 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
     private func prepared(
         _ status: RoomWarmupStatus,
         chat: Chat,
-        kakao: ApplicationIdentity
+        kakao: ApplicationIdentity,
+        foregroundProcessID: pid_t
     ) -> PreparedRoomWarmup {
         PreparedRoomWarmup(
             status: status,
@@ -239,8 +257,46 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
             isSelfChat: chat.isSelfChat,
             processID: kakao.processID,
             bundleIdentifier: kakao.bundleIdentifier!,
-            launchDate: kakao.launchDate!
+            launchDate: kakao.launchDate!,
+            foregroundProcessID: foregroundProcessID
         )
+    }
+
+    private func verifyOpenedRoomAfterRestoration(
+        chat: Chat,
+        kakao: ApplicationIdentity,
+        prior: ApplicationIdentity,
+        appElement: AXUIElement,
+        baseline: Scene
+    ) throws {
+        let verification = Result {
+            try waitForExactNewRoom(
+                chat: chat,
+                kakao: kakao,
+                appElement: appElement,
+                baseline: baseline,
+                requireKakaoForeground: false
+            )
+        }
+        let finalRestoration = restore(prior: prior, from: kakao)
+        switch (verification, finalRestoration) {
+        case (.success, .restored):
+            return
+        case (.success, .superseded):
+            throw SendUIError.preconditionFailed(
+                "The foreground application changed while the room finished opening; no message was composed or sent"
+            )
+        case (.success, .failed):
+            throw SendUIError.preconditionFailed(
+                "The room opened, but the prior application could not be stably restored; no message was composed or sent"
+            )
+        case (.failure(let error), .restored), (.failure(let error), .superseded):
+            throw error
+        case (.failure, .failed):
+            throw SendUIError.preconditionFailed(
+                "Room verification failed and the prior application could not be stably restored; no message was composed or sent"
+            )
+        }
     }
 
     private func openExactRoom(
@@ -610,17 +666,33 @@ final class ForegroundRoomWarmup: @unchecked Sendable {
         prior: ApplicationIdentity,
         from kakao: ApplicationIdentity
     ) -> RestorationResult {
-        guard let current = NSWorkspace.shared.frontmostApplication else { return .failed }
-        guard matches(current, prior) || matches(current, kakao) else { return .superseded }
-        guard isCurrentIdentity(prior), isCurrentIdentity(kakao),
-              prior.application.activate(from: kakao.application, options: []) else {
-            return .failed
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        var stableSamples = 0
+        var activationAttempts = 0
+        var nextActivationAttempt = ProcessInfo.processInfo.systemUptime
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            guard isCurrentIdentity(prior),
+                  let current = NSWorkspace.shared.frontmostApplication else { return .failed }
+            if matches(current, prior) {
+                stableSamples += 1
+                if stableSamples >= 10 { return .restored }
+            } else if matches(current, kakao) {
+                guard isCurrentIdentity(kakao) else { return .failed }
+                stableSamples = 0
+                let now = ProcessInfo.processInfo.systemUptime
+                if now >= nextActivationAttempt {
+                    guard activationAttempts < 3 else { return .failed }
+                    activationAttempts += 1
+                    nextActivationAttempt = now + 0.5
+                    guard prior.application.activate(options: []) else {
+                        return .failed
+                    }
+                }
+            } else {
+                return .superseded
+            }
+            Thread.sleep(forTimeInterval: 0.05)
         }
-        return waitForFrontmost(
-            prior,
-            allowing: kakao,
-            timeout: 2,
-            stableSampleCount: 10
-        ) ? .restored : .failed
+        return .failed
     }
 }

@@ -56,8 +56,8 @@ brew install sqlcipher
 git clone https://github.com/sangha-lightanchor/kakaocli.git
 cd kakaocli
 
-# Tested kakaocli 0.7.0 security baseline
-git checkout a53c24d67259db7d7ee4795fea36916a4251041e
+# Tested kakaocli 0.7.1 security baseline
+git checkout 3e8376025f10a6c582859e0bd13945e9a17cb0ab
 
 swift test
 swift build -c release
@@ -67,9 +67,8 @@ install -m 755 .build/release/kakaocli "$HOME/.local/bin/kakaocli"
 ```
 
 The full commit SHA is the reproducible build recommended for Chase and other
-users who need the tested hardened sender. It reports `0.7.0`. Development
-continues on the `feat/upstream-v0.6-safe-improvements` branch; pin the commit
-above for a stable installation.
+users who need the tested hardened sender. It reports `0.7.1`. Development
+continues on `main`; pin the commit above for a stable installation.
 
 If `~/.local/bin` is not already on your `PATH`, either add it or invoke the
 binary using its full path.
@@ -177,18 +176,21 @@ All read commands support `--json` for structured output.
 printf '%s' 'message' | kakaocli send --chat-id 123456 --request-id UUID
 printf '%s' 'message' | kakaocli send --self --request-id UUID
 printf '%s' 'message' | kakaocli send --self --request-id UUID --dry-run
+printf '%s' 'message' | kakaocli send --chat-id 123456 --request-id UUID --preflight --json
 ```
 
 `send` never launches or activates KakaoTalk, raises a window, moves the cursor,
-or posts global input. KakaoTalk must already be running with its main window
-rendered. The command resolves the ID through the local database, requires one
-database-unique UI identity and one exact row in the structurally verified,
-current Chats table, rejects unrelated rooms and all drafts, and may reuse only
-one exact open target room with a certified empty composer. For a closed room,
-the exact row-opening Return event is delivered only to KakaoTalk's PID and the
-command aborts if the foreground app changes. Composition never focuses the
-composer; delivery uses the same direct, visible, frame-contained Send control
-after rechecking the current room/composer/control and database identity. A
+or posts keyboard or mouse input. Open the exact target room manually once,
+leave it open, and switch back to another app; `send` requires KakaoTalk to
+remain in the background. The command resolves the ID through the local
+database, requires one database-unique UI identity and one exact visible row in
+the structurally verified current Chats table, and rejects closed rooms,
+unrelated rooms, and all drafts. A bounded read-only preflight captures one
+exact room, empty composer, and direct visible frame-contained Send control
+before any unknown receipt is reserved. `--preflight` runs that same readiness
+check without composing, sending, or creating a receipt. Composition never
+focuses the composer; delivery uses the preflighted control only after
+rechecking the room, composer, foreground app, and database identity. A
 same-process mutex and cross-process lock cover the whole resolution, UI, and
 exact database-confirmation transaction. Bodies are capped at 64 KiB of UTF-8.
 
@@ -242,8 +244,9 @@ kakaocli login --clear                                # Remove credentials
 ```
 
 The `login` command can manage stored credentials. `send` deliberately does
-not enter the app lifecycle path and fails closed when the rendered main window
-is unavailable; the user may foreground KakaoTalk manually.
+not enter the app lifecycle path and fails closed when the rendered main or
+exact target-room window is unavailable. Open the target room manually, leave
+it open, then switch back to another app before sending.
 
 ## AI Integration / AI 연동
 
@@ -326,7 +329,7 @@ kakaocli는 카카오톡의 로컬 SQLCipher 암호화 데이터베이스를 **�
 
 - **Incomplete message history.** KakaoTalk Mac only syncs messages from the server when you open a chat. If you haven't opened a chat on your Mac in a while (or ever), older messages won't be in the local database. Use `kakaocli harvest --scroll` to trigger loading older history, but this is limited by KakaoTalk's own sync behavior and the Talk Drive Plus paywall.
 - **Group chat names may show as `(unknown)`.** The database doesn't always store display names for group chats. Run `kakaocli harvest` to capture names from the UI.
-- **Sending requires a rendered KakaoTalk main window.** `send` never launches or activates KakaoTalk and fails closed if the app or main window is unavailable. The user may foreground it manually. Read commands work from the local database; `harvest` still uses its separate foreground UI workflow.
+- **Sending requires a rendered main window and already-open target room.** Open the exact room manually once, leave it open, and switch back to another app. `send` refuses to run while KakaoTalk is foreground and never launches, activates, raises, focuses, or opens a room. Read commands work from the local database; `harvest` still uses its separate foreground UI workflow.
 - **One Mac at a time.** KakaoTalk only allows one Mac logged in per account.
 - **Media and non-text messages.** Currently only text messages are fully supported. Photos, videos, stickers, and other media types are visible in the database but not rendered.
 
@@ -335,7 +338,7 @@ kakaocli는 카카오톡의 로컬 SQLCipher 암호화 데이터베이스를 **�
 
 - **불완전한 메시지 기록.** 카카오톡 Mac은 채팅을 열어야 서버에서 메시지를 동기화합니다. Mac에서 오래 열지 않은 채팅은 이전 메시지가 로컬 데이터베이스에 없을 수 있습니다. `kakaocli harvest --scroll`로 이전 메시지 로드를 시도할 수 있지만, 카카오톡 자체 동기화 및 톡드라이브 플러스 페이월에 의해 제한됩니다.
 - **그룹 채팅 이름이 `(unknown)`으로 표시될 수 있습니다.** `kakaocli harvest`를 실행하여 UI에서 이름을 수집하세요.
-- **전송 시 카카오톡 메인 창 필요.** `send`는 카카오톡을 실행하거나 활성화하지 않으며 앱이나 메인 창을 사용할 수 없으면 실패합니다. 사용자가 직접 카카오톡을 전면에 표시할 수 있습니다. `harvest`의 별도 UI 흐름은 계속 포그라운드 권한이 필요합니다.
+- **전송 시 메인 창과 대상 채팅방 창이 열려 있어야 합니다.** 대상 채팅방을 한 번 직접 열어 둔 뒤 다른 앱으로 전환하세요. `send`는 카카오톡이 포그라운드이면 실행을 거부하며, 카카오톡을 실행·활성화·전면 표시하거나 채팅방을 자동으로 열지 않습니다. `harvest`의 별도 UI 흐름은 계속 포그라운드 권한이 필요합니다.
 - **계정당 Mac 1대.** 카카오톡은 계정당 하나의 Mac만 로그인을 허용합니다.
 - **미디어 및 비텍스트 메시지.** 현재 텍스트 메시지만 완전히 지원됩니다.
 

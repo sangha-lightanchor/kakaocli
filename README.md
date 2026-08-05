@@ -57,7 +57,7 @@ git clone https://github.com/sangha-lightanchor/kakaocli.git
 cd kakaocli
 
 # Tested kakaocli 0.7.0 security baseline
-git checkout 20d63bb7456add8d94e3387bacb26bae2f7d2cf5
+git checkout a53c24d67259db7d7ee4795fea36916a4251041e
 
 swift test
 swift build -c release

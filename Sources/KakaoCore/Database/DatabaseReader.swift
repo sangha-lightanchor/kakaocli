@@ -5,10 +5,12 @@ import Foundation
 /// Reads KakaoTalk's encrypted SQLite database using SQLCipher.
 public final class DatabaseReader: @unchecked Sendable {
     private var db: OpaquePointer?
+    private let metadataStore: MetadataStore?
     public let databasePath: String
 
-    public init(databasePath: String) {
+    public init(databasePath: String, metadataStore: MetadataStore? = nil) {
         self.databasePath = databasePath
+        self.metadataStore = metadataStore
     }
 
     deinit {
@@ -144,7 +146,8 @@ public final class DatabaseReader: @unchecked Sendable {
         let sql = """
             SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                    r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
-                   u.displayName, u.friendNickName, u.nickName
+                   u.displayName, u.friendNickName, u.nickName,
+                   r.displayMemberIds
             FROM NTChatRoom r
             LEFT JOIN NTUser u ON r.directChatMemberUserId = u.userId AND u.linkId = 0
             \(whereClause)
@@ -152,25 +155,138 @@ public final class DatabaseReader: @unchecked Sendable {
             \(limitClause)
             """
         if let limit { bindings.append(.int(max(1, limit))) }
-        return try query(sql, bind: bindings) { row in
+        let loaded = try query(sql, bind: bindings) { row in
             // For direct chats, use the friend's name; for groups, use chatName
-            let chatName = row.string(2)
+            let chatName = Self.nonempty(row.string(2))
             // Kakao's chat list prefers the locally assigned friend nickname.
-            let displayName = row.string(8) ?? row.string(7) ?? row.string(9)
+            let displayName = Self.nonempty(row.string(8))
+                ?? Self.nonempty(row.string(7))
+                ?? Self.nonempty(row.string(9))
             let isSelf = row.int(1) == 5
             let name = isSelf ? (selfDisplayName ?? "(unknown)") : (chatName ?? displayName ?? "(unknown)")
 
-            return Chat(
+            return LoadedChat(
                 id: row.int64(0),
-                type: Chat.ChatType.from(rawInt: row.int(1)),
+                rawType: row.int(1),
                 displayName: name,
                 memberCount: row.int(3),
                 lastMessageId: row.optionalInt64(4),
                 lastMessageAt: row.optionalKakaoDate(5),
                 unreadCount: row.int(6),
-                isSelfChat: isSelf
+                isSelfChat: isSelf,
+                displayMemberIDs: row.data(10)
             )
         }
+        return try loaded.map { value in
+            let verifiedGroupName: String?
+            if value.rawType == 1, value.displayName == "(unknown)" {
+                verifiedGroupName = try participantVerifiedGroupName(
+                    chatID: value.id,
+                    memberCount: value.memberCount,
+                    displayMemberIDs: value.displayMemberIDs
+                )
+            } else {
+                verifiedGroupName = nil
+            }
+            return Chat(
+                id: value.id,
+                type: Chat.ChatType.from(rawInt: value.rawType),
+                displayName: verifiedGroupName ?? value.displayName,
+                memberCount: value.memberCount,
+                lastMessageId: value.lastMessageId,
+                lastMessageAt: value.lastMessageAt,
+                unreadCount: value.unreadCount,
+                isSelfChat: value.isSelfChat
+            )
+        }
+    }
+
+    /// Kakao leaves `chatName` empty for participant-named group rooms. Use a
+    /// harvested UI title only when fresh source-database membership proves the
+    /// same complete participant-name multiset and member count. The UI layer
+    /// still has to find exactly one row/window with this exact title.
+    private func participantVerifiedGroupName(
+        chatID: Int64,
+        memberCount: Int,
+        displayMemberIDs: Data?
+    ) throws -> String? {
+        guard let metadataStore,
+              let metadata = metadataStore.info(for: chatID),
+              metadata.chatType == 1,
+              metadata.memberCount == memberCount,
+              metadata.lastHarvested != nil,
+              let displayMemberIDs,
+              let propertyList = try? PropertyListSerialization.propertyList(
+                  from: displayMemberIDs,
+                  options: [],
+                  format: nil
+              ),
+              let values = propertyList as? [Any] else { return nil }
+
+        let memberIDs = values.compactMap { value -> Int64? in
+            if let number = value as? NSNumber { return number.int64Value }
+            if let integer = value as? Int { return Int64(integer) }
+            if let integer = value as? Int64 { return integer }
+            return nil
+        }
+        guard memberCount > 1,
+              memberIDs.count == values.count,
+              memberIDs.count == memberCount - 1,
+              memberIDs.allSatisfy({ $0 > 0 }),
+              Set(memberIDs).count == memberIDs.count else { return nil }
+
+        let placeholders = Array(repeating: "?", count: memberIDs.count)
+            .joined(separator: ",")
+        let rows = try query(
+            """
+            SELECT userId,
+                   COALESCE(NULLIF(friendNickName, ''), NULLIF(displayName, ''), NULLIF(nickName, ''))
+            FROM NTUser
+            WHERE linkId = 0 AND userId IN (\(placeholders))
+            """,
+            bind: memberIDs.map(SQLValue.int64)
+        ) { row in
+            (row.int64(0), Self.nonempty(row.string(1)))
+        }
+        guard rows.count == memberIDs.count else { return nil }
+        var namesByID: [Int64: String] = [:]
+        for (id, name) in rows {
+            guard let name, namesByID[id] == nil else { return nil }
+            namesByID[id] = name
+        }
+        guard namesByID.count == memberIDs.count else { return nil }
+        let currentNames = memberIDs.compactMap { namesByID[$0] }
+        guard currentNames.count == memberIDs.count else { return nil }
+
+        let harvestedName = metadata.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !harvestedName.isEmpty, harvestedName != "(unknown)" else { return nil }
+        let harvestedNames = harvestedName.components(separatedBy: ", ")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard harvestedNames.allSatisfy({ !$0.isEmpty }),
+              Self.multiset(harvestedNames) == Self.multiset(currentNames) else { return nil }
+        return harvestedName
+    }
+
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func multiset(_ values: [String]) -> [String: Int] {
+        values.reduce(into: [:]) { counts, value in counts[value, default: 0] += 1 }
+    }
+
+    private struct LoadedChat {
+        let id: Int64
+        let rawType: Int
+        let displayName: String
+        let memberCount: Int
+        let lastMessageId: Int64?
+        let lastMessageAt: Date?
+        let unreadCount: Int
+        let isSelfChat: Bool
+        let displayMemberIDs: Data?
     }
 
     /// Get messages for a chat, optionally filtered by time.
@@ -477,6 +593,13 @@ public final class DatabaseReader: @unchecked Sendable {
         func string(_ col: Int32) -> String? {
             guard let ptr = sqlite3_column_text(stmt, col) else { return nil }
             return String(cString: ptr)
+        }
+
+        func data(_ col: Int32) -> Data? {
+            guard sqlite3_column_type(stmt, col) != SQLITE_NULL else { return nil }
+            let count = Int(sqlite3_column_bytes(stmt, col))
+            guard count > 0, let bytes = sqlite3_column_blob(stmt, col) else { return nil }
+            return Data(bytes: bytes, count: count)
         }
 
         func bool(_ col: Int32) -> Bool {

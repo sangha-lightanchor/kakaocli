@@ -20,6 +20,7 @@
 - Require HTTPS for remote webhooks, reject URL credentials and downgrade redirects, use an ephemeral cookie-free session, and bound sync intervals
 - Persist harvested chat-name metadata atomically in a user-owned mode-0600 file and reject symlinked or corrupt state
 - Bound KakaoTalk Accessibility messaging so stalled AX calls fail closed instead of hanging indefinitely
+- Resolve blank-name group chats only when secure harvested titles exactly match current source membership IDs, participant names, type, and count
 - Harden state and lock files against symlinks, wrong owners, and non-user permissions; give each confirmed chat/log row one durable request owner
 - Reconcile stored `unknown` attempts read-only under the same request ID without repeating UI work
 - Limit send bodies to 64 KiB and remove source-database keys from send-process arguments

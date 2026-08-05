@@ -192,6 +192,12 @@ after rechecking the current room/composer/control and database identity. A
 same-process mutex and cross-process lock cover the whole resolution, UI, and
 exact database-confirmation transaction. Bodies are capped at 64 KiB of UTF-8.
 
+For participant-named groups where Kakao leaves the source `chatName` empty,
+the CLI may use the secure harvested UI title only after proving that its full
+participant-name multiset, chat type, and member count match the current
+binary-plist member IDs and current user rows. Any membership, nickname,
+metadata, or UI-title mismatch fails before composition.
+
 ### Sync / 동기화
 
 ```bash

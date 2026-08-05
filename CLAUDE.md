@@ -29,6 +29,10 @@ The package requires Homebrew SQLCipher and uses Swift Argument Parser.
   unrelated rooms and drafts fail closed.
 - `DatabaseReader.confirmedOutgoing` scopes confirmation to the intended
   `chat_id`, current user, log ID above the snapshot, and exact message bytes.
+- `DatabaseReader` resolves participant-named groups with an empty source
+  `chatName` only when secure harvested metadata exactly matches the current
+  binary-plist `displayMemberIds`, `NTUser` names, chat type, and member count.
+  The ordinary exact-row/window checks still apply to the resulting title.
 - `DatabaseLocator` caches only a mode-0600 database path/user-ID identity. It
   derives the SQLCipher key in memory; expensive identity recovery is explicit
   through `kakaocli auth --refresh`.

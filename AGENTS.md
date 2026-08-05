@@ -47,6 +47,9 @@ The safe send path:
 - requires a database-unique display identity and the structurally verified,
   selected/current Chats table, and rejects duplicate UI rows, unrelated open
   rooms, nonempty drafts, ambiguous composers, and wrong window titles;
+- permits a participant-named group with an empty source `chatName` only when
+  its secure harvested title has the same complete name multiset, chat type,
+  and member count as the current `displayMemberIds` and `NTUser` rows;
 - may reuse exactly one open target room only when its current Kakao room and
   composition structure are certified and its composer is provably empty;
 - never activates or raises KakaoTalk, moves the pointer, or posts global input;

@@ -64,7 +64,13 @@ func openDatabase(dbPath: String?, key: String?, userId userIdOverride: Int? = n
         key: key,
         userID: userIdOverride
     )
-    let reader = DatabaseReader(databasePath: resolved.path)
+    // Participant-named groups have no source `chatName`. Secure harvested
+    // metadata is only used after DatabaseReader proves the current complete
+    // member set and names from `displayMemberIds`/`NTUser`.
+    let reader = DatabaseReader(
+        databasePath: resolved.path,
+        metadataStore: try? MetadataStore()
+    )
     try reader.open(key: resolved.key)
     return reader
 }

@@ -53,6 +53,10 @@ composer. It never focuses the composer, keeps the foreground app unchanged,
 uses one direct verified Send control, and confirms exact new outgoing bytes
 under that same chat ID. Message bodies are limited to 64 KiB.
 
+A group whose source `chatName` is empty is eligible only when its secure
+harvested title exactly matches the current full participant-name multiset,
+member IDs, chat type, and member count. Any mismatch fails before composition.
+
 Treat only `confirmed` with the intended `chat_id` and non-null `log_id` as
 delivered. If the result is `unknown`, never create a new request ID and never
 repeat the UI action. Repeating the exact same request ID, destination, and body

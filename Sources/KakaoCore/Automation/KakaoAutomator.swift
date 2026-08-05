@@ -8,9 +8,9 @@ protocol KakaoSubmitting: AnyObject, Sendable {
     /// and must complete before a durable unknown receipt is reserved.
     func prepare(chat: Chat) throws
 
-    /// A precondition error proves that no send action was invoked and any
-    /// body written by this call was safely removed. All later uncertainty is
-    /// reported as `outcomeUnknown` so callers never retry the UI action.
+    /// A precondition error proves that no composer mutation or send action was
+    /// attempted. Every failure after composer mutation is reported as
+    /// `outcomeUnknown`, even if best-effort cleanup empties the composer.
     func submit(
         chat: Chat,
         message: String,
@@ -23,6 +23,14 @@ protocol KakaoSubmitting: AnyObject, Sendable {
 final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
     static let bundleId = "com.kakao.KakaoTalkMac"
 
+    private struct RoomSnapshot {
+        let room: AXUIElement
+        let title: String
+        let composer: AXUIElement
+        let composerContainer: AXUIElement
+        let children: [AXUIElement]
+    }
+
     private struct PreparedSend {
         let chat: Chat
         let application: NSRunningApplication
@@ -32,9 +40,11 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         let table: AXUIElement
         let row: AXUIElement
         let composer: AXUIElement
+        let composerContainer: AXUIElement
         let sendControl: AXUIElement
         let windows: [AXUIElement]
         let roomChildren: [AXUIElement]
+        let roomSnapshots: [RoomSnapshot]
         let foregroundProcessID: pid_t
     }
 
@@ -62,6 +72,18 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                     : "Multiple KakaoTalk processes are running; the exact process is ambiguous"
             )
         }
+        guard let bundleURL = runningApp.bundleURL,
+              let bundle = Bundle(url: bundleURL),
+              BackgroundSendSelector.isCertifiedTargetedReturnBuild(
+                  version: bundle.object(
+                      forInfoDictionaryKey: "CFBundleShortVersionString"
+                  ) as? String,
+                  build: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+              ) else {
+            throw AutomationError.preconditionFailed(
+                "This KakaoTalk build has not passed background Return self-chat certification"
+            )
+        }
         guard let initialFrontmostProcessID = foregroundProcessID() else {
             throw AutomationError.preconditionFailed("The foreground application could not be verified")
         }
@@ -87,9 +109,9 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 "KakaoTalk's main window is not rendered; open it manually once"
             )
         }
-        guard let table = AXHelpers.verifiedSendChatListTable(mainWindow) else {
+        guard let table = verifiedIdentityTable(in: mainWindow, chat: chat) else {
             throw AutomationError.preconditionFailed(
-                "KakaoTalk's selected Chats tab and chat list could not be structurally verified"
+                "KakaoTalk's exact destination identity table could not be structurally verified"
             )
         }
         let rows = matchingRows(in: table, chat: chat)
@@ -99,43 +121,73 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 "A non-room or structurally ambiguous KakaoTalk window is open"
             )
         }
-        let evidence = roomWindows.map { window in
-            let composers = AXHelpers.composerCandidates(in: window)
-            return OpenRoomEvidence(
-                title: AXHelpers.title(window) ?? "",
-                composerCount: composers.count,
-                composerText: composers.first.flatMap(AXHelpers.value)
+        var roomSnapshots: [RoomSnapshot] = []
+        for roomWindow in roomWindows {
+            let composers = AXHelpers.composerCandidates(in: roomWindow)
+            guard let title = AXHelpers.title(roomWindow), !title.isEmpty else {
+                throw AutomationError.preconditionFailed("An open room has no exact title")
+            }
+            guard composers.count == 1, let roomComposer = composers.first else {
+                throw AutomationError.preconditionFailed(
+                    "Open room '\(title)' does not expose one exact composer"
+                )
+            }
+            guard let roomComposerContainer = AXHelpers.composerContainer(in: roomWindow),
+                  AXHelpers.children(roomComposerContainer).count == 1,
+                  AXHelpers.children(roomComposerContainer).first.map({
+                      CFEqual($0, roomComposer)
+                  }) == true else {
+                throw AutomationError.preconditionFailed(
+                    "Open room '\(title)' has an ambiguous composer container"
+                )
+            }
+            guard AXHelpers.value(roomComposer) == "" else {
+                throw AutomationError.preconditionFailed(
+                    "Open room '\(title)' contains a draft"
+                )
+            }
+            guard AXHelpers.isCleanCompositionRoom(
+                roomWindow,
+                composer: roomComposer
+            ) else {
+                throw AutomationError.preconditionFailed(
+                    "Open room '\(title)' has uncertified composition chrome"
+                )
+            }
+            roomSnapshots.append(
+                RoomSnapshot(
+                    room: roomWindow,
+                    title: title,
+                    composer: roomComposer,
+                    composerContainer: roomComposerContainer,
+                    children: AXHelpers.children(roomWindow)
+                )
             )
+        }
+        let evidence = roomSnapshots.map {
+            OpenRoomEvidence(title: $0.title, composerCount: 1, composerText: "")
         }
         _ = try BackgroundSendSelector.preparation(
             expectedTitle: chat.displayName,
             openRooms: evidence,
             matchingRowCount: rows.count
         )
+        let targetSnapshots = roomSnapshots.filter { $0.title == chat.displayName }
         guard rows.count == 1, let row = rows.first,
-              roomWindows.count == 1, let room = roomWindows.first else {
+              targetSnapshots.count == 1, let targetSnapshot = targetSnapshots.first else {
             throw AutomationError.preconditionFailed(
                 "Open the exact target room manually once, leave it open, then switch back to another app"
             )
         }
+        let room = targetSnapshot.room
         guard AXHelpers.title(room) == chat.displayName else {
             throw AutomationError.preconditionFailed(
                 "The open room title does not exactly match the destination"
             )
         }
-        let composers = AXHelpers.composerCandidates(in: room)
-        guard composers.count == 1, let composer = composers.first else {
-            throw AutomationError.preconditionFailed("The target does not expose one exact composer")
-        }
-        guard AXHelpers.value(composer)?.isEmpty == true else {
-            throw AutomationError.preconditionFailed("The target room contains an unsent draft")
-        }
-        guard AXHelpers.isCleanCompositionRoom(room, composer: composer) else {
-            throw AutomationError.preconditionFailed(
-                "The target room contains queued or structurally ambiguous composition state"
-            )
-        }
-        let roomChildren = AXHelpers.children(room)
+        let composer = targetSnapshot.composer
+        let composerContainer = targetSnapshot.composerContainer
+        let roomChildren = targetSnapshot.children
         let controls = sendControlCandidates(in: room)
         guard controls.count == 1, let sendControl = controls.first else {
             throw AutomationError.preconditionFailed(
@@ -155,6 +207,9 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             body: "",
             expectedWindows: windows,
             expectedRoomChildren: roomChildren,
+            expectedComposerContainer: composerContainer,
+            roomSnapshots: roomSnapshots,
+            composerIdentityPolicy: .exactPreMutationComposer,
             initialFrontmostProcessID: initialFrontmostProcessID
         ) else {
             throw AutomationError.preconditionFailed(
@@ -172,9 +227,11 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             table: table,
             row: row,
             composer: composer,
+            composerContainer: composerContainer,
             sendControl: sendControl,
             windows: windows,
             roomChildren: roomChildren,
+            roomSnapshots: roomSnapshots,
             foregroundProcessID: initialFrontmostProcessID
         )
         preparedLock.unlock()
@@ -211,10 +268,12 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         let table = prepared.table
         let row = prepared.row
         let composer = prepared.composer
+        let composerContainer = prepared.composerContainer
         let preflightControl = prepared.sendControl
         let expectedTitle = chat.displayName
         let expectedWindows = prepared.windows
         let expectedRoomChildren = prepared.roomChildren
+        let roomSnapshots = prepared.roomSnapshots
         let initialFrontmostProcessID = prepared.foregroundProcessID
 
         guard finalRoomIsVerified(
@@ -230,6 +289,9 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             body: "",
             expectedWindows: expectedWindows,
             expectedRoomChildren: expectedRoomChildren,
+            expectedComposerContainer: composerContainer,
+            roomSnapshots: roomSnapshots,
+            composerIdentityPolicy: .exactPreMutationComposer,
             initialFrontmostProcessID: initialFrontmostProcessID
         ) else {
             throw AutomationError.preconditionFailed(
@@ -240,6 +302,22 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         var actionAttempted = false
         var composerMutationAttempted = false
         do {
+            guard makeTargetComposerFirstResponder(
+                app: app,
+                room: room,
+                composer: composer,
+                initialFrontmostProcessID: initialFrontmostProcessID
+            ), exactFocusedComposer(
+                app: app,
+                in: room,
+                body: "",
+                expectedRoomChildren: expectedRoomChildren,
+                expectedComposerContainer: composerContainer
+            ) != nil else {
+                throw AutomationError.preconditionFailed(
+                    "The exact target composer could not become Kakao's first responder in the background"
+                )
+            }
             do {
                 try finalIdentityCheck()
             } catch {
@@ -248,7 +326,7 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 )
             }
             composerMutationAttempted = true
-            guard AXHelpers.setValue(composer, message), AXHelpers.value(composer) == message else {
+            guard AXHelpers.setValue(composer, message) else {
                 throw AutomationError.preconditionFailed("The composer did not accept the exact message")
             }
             guard foregroundProcessID() == initialFrontmostProcessID else {
@@ -257,35 +335,35 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 )
             }
 
-            let controls = waitForExactSendControls(
+            guard let control = waitForStableSendControl(
                 in: room,
+                expectedControl: preflightControl,
                 initialFrontmostProcessID: initialFrontmostProcessID,
-                timeout: 2
-            )
-            guard controls.count == 1, let control = controls.first else {
+                timeout: 2,
+                isStable: {
+                    finalRoomIsVerified(
+                        application: runningApp,
+                        app: app,
+                        mainWindow: mainWindow,
+                        room: room,
+                        table: table,
+                        row: row,
+                        chat: chat,
+                        expectedTitle: expectedTitle,
+                        composer: composer,
+                        body: message,
+                        expectedWindows: expectedWindows,
+                        expectedRoomChildren: expectedRoomChildren,
+                        expectedComposerContainer: composerContainer,
+                        roomSnapshots: roomSnapshots,
+                        composerIdentityPolicy: .structurallyAnchoredAfterMutation,
+                        initialFrontmostProcessID: initialFrontmostProcessID
+                    )
+                }
+            ) else {
                 throw AutomationError.preconditionFailed(
-                    controls.isEmpty
-                        ? "The exact Send control did not become enabled"
-                        : "Multiple exact Send controls are exposed"
+                    "The exact composed room and Send control did not stabilize"
                 )
-            }
-            guard CFEqual(control, preflightControl),
-                  finalRoomIsVerified(
-                    application: runningApp,
-                    app: app,
-                    mainWindow: mainWindow,
-                    room: room,
-                    table: table,
-                    row: row,
-                    chat: chat,
-                    expectedTitle: expectedTitle,
-                    composer: composer,
-                    body: message,
-                    expectedWindows: expectedWindows,
-                    expectedRoomChildren: expectedRoomChildren,
-                    initialFrontmostProcessID: initialFrontmostProcessID
-                  ) else {
-                throw AutomationError.preconditionFailed("Room or composer identity changed before Send")
             }
             do {
                 try finalIdentityCheck()
@@ -296,8 +374,12 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             }
             let finalControls = exactSendControls(in: room)
             guard finalControls.count == 1,
-                  finalControls.first.map({ CFEqual($0, control) }) == true,
-                  finalRoomIsVerified(
+                  finalControls.first.map({ CFEqual($0, control) }) == true else {
+                throw AutomationError.preconditionFailed(
+                    "The exact Send control changed before invocation"
+                )
+            }
+            guard finalRoomIsVerified(
                       application: runningApp,
                       app: app,
                       mainWindow: mainWindow,
@@ -310,25 +392,64 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                       body: message,
                       expectedWindows: expectedWindows,
                       expectedRoomChildren: expectedRoomChildren,
+                      expectedComposerContainer: composerContainer,
+                      roomSnapshots: roomSnapshots,
+                      composerIdentityPolicy: .structurallyAnchoredAfterMutation,
                       initialFrontmostProcessID: initialFrontmostProcessID
                   ) else {
-                throw AutomationError.preconditionFailed("The exact Send control changed before invocation")
-            }
-            actionAttempted = true
-            guard AXHelpers.performAction(control, kAXPressAction as String) else {
-                throw AutomationError.outcomeUnknown("The exact Send control did not acknowledge its action")
-            }
-            guard foregroundProcessID() == initialFrontmostProcessID else {
-                throw AutomationError.outcomeUnknown(
-                    "The foreground application changed after Send was invoked"
+                throw AutomationError.preconditionFailed(
+                    "Room or composer identity changed at the final invocation boundary"
                 )
             }
-        } catch {
-            if !actionAttempted, composerMutationAttempted {
-                let cleared = AXHelpers.value(composer) == message
-                    && AXHelpers.setValue(composer, "")
-                    && AXHelpers.value(composer) == ""
-                    && finalRoomIsVerified(
+            guard let focusedComposer = exactFocusedComposer(
+                app: app,
+                in: room,
+                body: message,
+                expectedRoomChildren: expectedRoomChildren,
+                expectedComposerContainer: composerContainer
+            ) else {
+                throw AutomationError.preconditionFailed(
+                    "The exact structurally anchored composer is not focused for Kakao-only Return"
+                )
+            }
+            guard AXHelpers.boolAttribute(room, kAXMainAttribute as String) == true else {
+                throw AutomationError.preconditionFailed(
+                    "The exact target room is not Kakao's internal main window"
+                )
+            }
+            guard let returnEvents = AXHelpers.makeTargetedReturnEvents() else {
+                throw AutomationError.preconditionFailed(
+                    "The Kakao-only Return event could not be created"
+                )
+            }
+            let invocationControls = exactSendControls(in: room)
+            guard invocationControls.count == 1,
+                  invocationControls.first.map({ CFEqual($0, control) }) == true,
+                  AXHelpers.boolAttribute(room, kAXMainAttribute as String) == true,
+                  exactFocusedComposer(
+                app: app,
+                in: room,
+                body: message,
+                expectedRoomChildren: expectedRoomChildren,
+                expectedComposerContainer: composerContainer
+            ).map({ CFEqual($0, focusedComposer) }) == true,
+                  foregroundProcessID() == initialFrontmostProcessID else {
+                throw AutomationError.preconditionFailed(
+                    "Control, room, composer focus, or foreground identity changed before Kakao-only Return"
+                )
+            }
+            actionAttempted = true
+            AXHelpers.postTargetedReturn(returnEvents, to: runningApp.processIdentifier)
+            guard foregroundProcessID() == initialFrontmostProcessID else {
+                throw AutomationError.outcomeUnknown(
+                    "The foreground application changed after Kakao-only Return was posted"
+                )
+            }
+            guard waitForStableCondition(
+                initialFrontmostProcessID: initialFrontmostProcessID,
+                timeout: 2,
+                {
+                    finalRoomIsVerified(
                         application: runningApp,
                         app: app,
                         mainWindow: mainWindow,
@@ -341,11 +462,76 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                         body: "",
                         expectedWindows: expectedWindows,
                         expectedRoomChildren: expectedRoomChildren,
+                        expectedComposerContainer: composerContainer,
+                        roomSnapshots: roomSnapshots,
+                        composerIdentityPolicy: .structurallyAnchoredAfterMutation,
                         initialFrontmostProcessID: initialFrontmostProcessID
                     )
+                }
+            ) else {
+                throw AutomationError.outcomeUnknown(
+                    "Kakao-only Return was posted but an exact empty composer was not observed"
+                )
+            }
+        } catch {
+            if !actionAttempted, composerMutationAttempted {
+                let currentComposer = exactFocusedComposer(
+                    app: app,
+                    in: room,
+                    body: message,
+                    expectedRoomChildren: expectedRoomChildren,
+                    expectedComposerContainer: composerContainer
+                )
+                let canClearExactDraft = currentComposer != nil
+                    && foregroundProcessID() == initialFrontmostProcessID
+                    && finalRoomIsVerified(
+                        application: runningApp,
+                        app: app,
+                        mainWindow: mainWindow,
+                        room: room,
+                        table: table,
+                        row: row,
+                        chat: chat,
+                        expectedTitle: expectedTitle,
+                        composer: composer,
+                        body: message,
+                        expectedWindows: expectedWindows,
+                        expectedRoomChildren: expectedRoomChildren,
+                        expectedComposerContainer: composerContainer,
+                        roomSnapshots: roomSnapshots,
+                        composerIdentityPolicy: .structurallyAnchoredAfterMutation,
+                        initialFrontmostProcessID: initialFrontmostProcessID
+                    )
+                let clearMutationSucceeded = canClearExactDraft
+                    && foregroundProcessID() == initialFrontmostProcessID
+                    && currentComposer.map { AXHelpers.setValue($0, "") } == true
+                let cleared = clearMutationSucceeded
+                    && waitForStableCondition(
+                        initialFrontmostProcessID: initialFrontmostProcessID,
+                        timeout: 2
+                    ) {
+                        finalRoomIsVerified(
+                        application: runningApp,
+                        app: app,
+                        mainWindow: mainWindow,
+                        room: room,
+                        table: table,
+                        row: row,
+                        chat: chat,
+                        expectedTitle: expectedTitle,
+                        composer: composer,
+                        body: "",
+                        expectedWindows: expectedWindows,
+                        expectedRoomChildren: expectedRoomChildren,
+                        expectedComposerContainer: composerContainer,
+                        roomSnapshots: roomSnapshots,
+                        composerIdentityPolicy: .structurallyAnchoredAfterMutation,
+                        initialFrontmostProcessID: initialFrontmostProcessID
+                    )
+                    }
                 if cleared {
-                    throw AutomationError.preconditionFailed(
-                        "The send precondition changed after composition; the exact draft was cleared"
+                    throw AutomationError.outcomeUnknown(
+                        "Composer mutation began; the exact draft was cleared, but delivery remains unknown and must not be retried automatically"
                     )
                 }
                 throw AutomationError.outcomeUnknown(
@@ -375,11 +561,16 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         body: String,
         expectedWindows: [AXUIElement],
         expectedRoomChildren: [AXUIElement],
+        expectedComposerContainer: AXUIElement,
+        roomSnapshots: [RoomSnapshot],
+        composerIdentityPolicy: ComposerIdentityPolicy,
         initialFrontmostProcessID: pid_t
     ) -> Bool {
         let windows = AXHelpers.windows(app)
         let composers = AXHelpers.composerCandidates(in: room)
-        guard let currentTable = AXHelpers.verifiedSendChatListTable(mainWindow),
+        let currentComposer = composers.count == 1 ? composers[0] : nil
+        let currentComposerContainer = AXHelpers.composerContainer(in: room)
+        guard let currentTable = verifiedIdentityTable(in: mainWindow, chat: chat),
               CFEqual(currentTable, table) else {
             return false
         }
@@ -388,30 +579,65 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
               currentRows.first.map({ CFEqual($0, row) }) == true else {
             return false
         }
+        let targetSnapshots = roomSnapshots.filter { CFEqual($0.room, room) }
+        let unrelatedSnapshots = roomSnapshots.filter { !CFEqual($0.room, room) }
+        let unrelatedRoomsAreStable = unrelatedSnapshots.allSatisfy { snapshot in
+            let currentComposers = AXHelpers.composerCandidates(in: snapshot.room)
+            let currentContainer = AXHelpers.composerContainer(in: snapshot.room)
+            return AXHelpers.isVerifiedRoomWindow(snapshot.room)
+                && AXHelpers.title(snapshot.room) == snapshot.title
+                && AXHelpers.sameElementOrder(
+                    AXHelpers.children(snapshot.room),
+                    snapshot.children
+                )
+                && currentContainer.map {
+                    CFEqual($0, snapshot.composerContainer)
+                } == true
+                && currentComposers.count == 1
+                && currentComposers.first.map {
+                    CFEqual($0, snapshot.composer)
+                } == true
+                && currentComposers.first.flatMap(AXHelpers.value) == ""
+                && currentComposers.first.map {
+                    AXHelpers.isCleanCompositionRoom(snapshot.room, composer: $0)
+                } == true
+                && currentComposers.first.map(AXHelpers.isFocused) == false
+        }
+        let exactWindowSet = AXHelpers.sameElementSet(windows, expectedWindows)
+            && windows.count == expectedWindows.count
+            && windows.count == roomSnapshots.count + 1
+            && targetSnapshots.count == 1
+            && unrelatedRoomsAreStable
+            && windows.contains(where: { CFEqual($0, mainWindow) })
+            && windows.contains(where: { CFEqual($0, room) })
+            && AXHelpers.isVerifiedRoomWindow(room)
+            && AXHelpers.sameElementOrder(
+                AXHelpers.children(room),
+                expectedRoomChildren
+            )
+            && currentComposer.map {
+                AXHelpers.isCleanCompositionRoom(room, composer: $0)
+            } == true
+        let evidence = FinalRoomEvidence(
+            applicationRunning: isOnlyExactApplication(application),
+            exactWindowSet: exactWindowSet,
+            mainWindowIdentifier: AXHelpers.identifier(mainWindow),
+            roomTitle: AXHelpers.title(room),
+            composerCount: composers.count,
+            composerIdentityMatches: currentComposer.map({ CFEqual($0, composer) }) == true,
+            composerContainerIdentityMatches: currentComposerContainer.map {
+                CFEqual($0, expectedComposerContainer)
+            } == true,
+            composerBody: currentComposer.flatMap(AXHelpers.value),
+            foregroundApplicationUnchanged: foregroundProcessID()
+                == initialFrontmostProcessID
+        )
         do {
             try BackgroundSendSelector.verifyFinalRoom(
                 expectedTitle: expectedTitle,
                 expectedBody: body,
-                evidence: FinalRoomEvidence(
-                    applicationRunning: isOnlyExactApplication(application),
-                    exactWindowSet: AXHelpers.sameElementSet(windows, expectedWindows)
-                        && windows.count == 2
-                        && windows.contains(where: { CFEqual($0, mainWindow) })
-                        && windows.contains(where: { CFEqual($0, room) })
-                        && AXHelpers.isVerifiedRoomWindow(room)
-                        && AXHelpers.sameElementSet(
-                            AXHelpers.children(room),
-                            expectedRoomChildren
-                        )
-                        && AXHelpers.isCleanCompositionRoom(room, composer: composer),
-                    mainWindowIdentifier: AXHelpers.identifier(mainWindow),
-                    roomTitle: AXHelpers.title(room),
-                    composerCount: composers.count,
-                    composerIdentityMatches: composers.first.map({ CFEqual($0, composer) }) == true,
-                    composerBody: AXHelpers.value(composer),
-                    foregroundApplicationUnchanged: foregroundProcessID()
-                        == initialFrontmostProcessID
-                )
+                composerIdentityPolicy: composerIdentityPolicy,
+                evidence: evidence
             )
             return true
         } catch {
@@ -433,19 +659,122 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         NSWorkspace.shared.frontmostApplication?.processIdentifier
     }
 
-    private func waitForExactSendControls(
+    private func verifiedIdentityTable(in mainWindow: AXUIElement, chat: Chat) -> AXUIElement? {
+        if chat.isSelfChat {
+            return AXHelpers.verifiedSendChatListTable(mainWindow)
+                ?? AXHelpers.verifiedSelfIdentityTable(mainWindow)
+        }
+        return AXHelpers.verifiedSendChatListTable(mainWindow)
+    }
+
+    private func makeTargetComposerFirstResponder(
+        app: AXUIElement,
+        room: AXUIElement,
+        composer: AXUIElement,
+        initialFrontmostProcessID: pid_t
+    ) -> Bool {
+        guard foregroundProcessID() == initialFrontmostProcessID,
+              AXHelpers.setMainWindow(room),
+              foregroundProcessID() == initialFrontmostProcessID,
+              AXHelpers.boolAttribute(room, kAXMainAttribute as String) == true,
+              AXHelpers.setFocused(composer),
+              foregroundProcessID() == initialFrontmostProcessID,
+              AXHelpers.elementAttribute(
+                  app,
+                  kAXFocusedWindowAttribute as String
+              ).map({ CFEqual($0, room) }) == true,
+              AXHelpers.elementAttribute(
+                  app,
+                  kAXFocusedUIElementAttribute as String
+              ).map({ CFEqual($0, composer) }) == true,
+              AXHelpers.isFocused(composer) else { return false }
+        return true
+    }
+
+    private func exactFocusedComposer(
+        app: AXUIElement,
         in room: AXUIElement,
+        body: String,
+        expectedRoomChildren: [AXUIElement],
+        expectedComposerContainer: AXUIElement
+    ) -> AXUIElement? {
+        let roomChildren = AXHelpers.children(room)
+        let container = AXHelpers.composerContainer(in: room)
+        let composers = AXHelpers.composerCandidates(in: room)
+        guard composers.count == 1, let composer = composers.first else { return nil }
+        let focusedWindow = AXHelpers.elementAttribute(
+            app,
+            kAXFocusedWindowAttribute as String
+        )
+        let focusedUIElement = AXHelpers.elementAttribute(
+            app,
+            kAXFocusedUIElementAttribute as String
+        )
+        guard BackgroundSendSelector.isExactTargetFirstResponder(
+            expectedBody: body,
+            evidence: FocusedComposerEvidence(
+                roomChildrenMatch: AXHelpers.sameElementOrder(
+                    roomChildren,
+                    expectedRoomChildren
+                ),
+                composerContainerMatches: container.map {
+                    CFEqual($0, expectedComposerContainer)
+                } == true,
+                composerCount: composers.count,
+                compositionStructureCertified: AXHelpers.isCleanCompositionRoom(
+                    room,
+                    composer: composer
+                ),
+                composerBody: AXHelpers.value(composer),
+                roomIsMain: AXHelpers.boolAttribute(
+                    room,
+                    kAXMainAttribute as String
+                ) == true,
+                focusedWindowMatchesRoom: focusedWindow.map {
+                    CFEqual($0, room)
+                } == true,
+                focusedUIElementMatchesComposer: focusedUIElement.map {
+                    CFEqual($0, composer)
+                } == true,
+                composerIsFocused: AXHelpers.isFocused(composer)
+            )
+        ) else { return nil }
+        return composer
+    }
+
+    private func waitForStableSendControl(
+        in room: AXUIElement,
+        expectedControl: AXUIElement,
         initialFrontmostProcessID: pid_t,
-        timeout: TimeInterval
-    ) -> [AXUIElement] {
+        timeout: TimeInterval,
+        isStable: () -> Bool
+    ) -> AXUIElement? {
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         while ProcessInfo.processInfo.systemUptime < deadline {
-            guard foregroundProcessID() == initialFrontmostProcessID else { return [] }
+            guard foregroundProcessID() == initialFrontmostProcessID else { return nil }
             let controls = exactSendControls(in: room)
-            if !controls.isEmpty { return controls }
+            if controls.count > 1 { return nil }
+            if let control = controls.first {
+                guard CFEqual(control, expectedControl) else { return nil }
+                if isStable() { return control }
+            }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        return exactSendControls(in: room)
+        return nil
+    }
+
+    private func waitForStableCondition(
+        initialFrontmostProcessID: pid_t,
+        timeout: TimeInterval,
+        _ condition: () -> Bool
+    ) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            guard foregroundProcessID() == initialFrontmostProcessID else { return false }
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return condition()
     }
 
     private func sendControlCandidates(in room: AXUIElement) -> [AXUIElement] {

@@ -178,7 +178,7 @@ struct SafeSendClientTests {
         #expect(database.resolveCalls == 2)
     }
 
-    @Test("precondition failure clears reservation for a same-ID retry")
+    @Test("pre-mutation submit precondition clears reservation for a same-ID retry")
     func preconditionRetry() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

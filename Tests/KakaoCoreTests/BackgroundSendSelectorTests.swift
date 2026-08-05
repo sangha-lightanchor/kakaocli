@@ -5,11 +5,88 @@ import Testing
 
 @Suite("Fail-closed send selection")
 struct BackgroundSendSelectorTests {
-    @Test("reuses only one exact room with one provably empty composer")
+    @Test("pins PID-targeted Return to the self-chat-certified KakaoTalk build")
+    func targetedReturnBuild() {
+        #expect(BackgroundSendSelector.isCertifiedTargetedReturnBuild(
+            version: "26.6.1",
+            build: "1190"
+        ))
+        for candidate in [
+            ("26.6.0", "1190"),
+            ("26.6.1", "1189"),
+            (nil, "1190"),
+            ("26.6.1", nil),
+        ] as [(String?, String?)] {
+            #expect(!BackgroundSendSelector.isCertifiedTargetedReturnBuild(
+                version: candidate.0,
+                build: candidate.1
+            ))
+        }
+    }
+
+    @Test("requires exact app-level first responder evidence for targeted Return")
+    func targetedReturnFirstResponder() {
+        func evidence(
+            roomChildrenMatch: Bool = true,
+            composerContainerMatches: Bool = true,
+            composerCount: Int = 1,
+            compositionStructureCertified: Bool = true,
+            composerBody: String? = "exact bytes",
+            roomIsMain: Bool = true,
+            focusedWindowMatchesRoom: Bool = true,
+            focusedUIElementMatchesComposer: Bool = true,
+            composerIsFocused: Bool = true
+        ) -> FocusedComposerEvidence {
+            FocusedComposerEvidence(
+                roomChildrenMatch: roomChildrenMatch,
+                composerContainerMatches: composerContainerMatches,
+                composerCount: composerCount,
+                compositionStructureCertified: compositionStructureCertified,
+                composerBody: composerBody,
+                roomIsMain: roomIsMain,
+                focusedWindowMatchesRoom: focusedWindowMatchesRoom,
+                focusedUIElementMatchesComposer: focusedUIElementMatchesComposer,
+                composerIsFocused: composerIsFocused
+            )
+        }
+
+        #expect(BackgroundSendSelector.isExactTargetFirstResponder(
+            expectedBody: "exact bytes",
+            evidence: evidence()
+        ))
+        let invalid = [
+            evidence(roomChildrenMatch: false),
+            evidence(composerContainerMatches: false),
+            evidence(composerCount: 0),
+            evidence(composerCount: 2),
+            evidence(compositionStructureCertified: false),
+            evidence(composerBody: "changed"),
+            evidence(roomIsMain: false),
+            evidence(focusedWindowMatchesRoom: false),
+            evidence(focusedUIElementMatchesComposer: false),
+            evidence(composerIsFocused: false),
+        ]
+        for candidate in invalid {
+            #expect(!BackgroundSendSelector.isExactTargetFirstResponder(
+                expectedBody: "exact bytes",
+                evidence: candidate
+            ))
+        }
+    }
+
+    @Test("reuses one exact target alongside only safe empty rooms")
     func openRooms() throws {
         #expect(try BackgroundSendSelector.preparation(
             expectedTitle: "Target",
             openRooms: [OpenRoomEvidence(title: "Target", composerCount: 1, composerText: "")],
+            matchingRowCount: 1
+        ) == .reuseExactRoom)
+        #expect(try BackgroundSendSelector.preparation(
+            expectedTitle: "Target",
+            openRooms: [
+                OpenRoomEvidence(title: "Other", composerCount: 1, composerText: ""),
+                OpenRoomEvidence(title: "Target", composerCount: 1, composerText: ""),
+            ],
             matchingRowCount: 1
         ) == .reuseExactRoom)
 
@@ -20,7 +97,11 @@ struct BackgroundSendSelectorTests {
             [OpenRoomEvidence(title: "Target", composerCount: 1, composerText: "draft")],
             [
                 OpenRoomEvidence(title: "Target", composerCount: 1, composerText: ""),
-                OpenRoomEvidence(title: "Other", composerCount: 1, composerText: ""),
+                OpenRoomEvidence(title: "Other", composerCount: 1, composerText: "draft"),
+            ],
+            [
+                OpenRoomEvidence(title: "Target", composerCount: 1, composerText: ""),
+                OpenRoomEvidence(title: "Target", composerCount: 1, composerText: ""),
             ],
         ] {
             #expect(throws: AutomationError.self) {
@@ -251,6 +332,51 @@ struct BackgroundSendSelectorTests {
         #expect(!BackgroundSendSelector.isCleanCompositionWindow(
             evidence(nestedButtonHasTwoEmptyGroups: false)
         ))
+
+        let legacyIdentified = [
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
+            CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
+            CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
+        ]
+        let legacy = CompositionWindowEvidence(
+            directChildCount: 18,
+            identifiedDirectChildren: legacyIdentified,
+            identifierlessButtonCount: 9,
+            anonymousLeafRoles: [],
+            anonymousNonLeafCount: 0,
+            fixedLeavesAreEmpty: true,
+            sliderHasOneAnonymousLeafValueIndicator: true,
+            emptyIdentifierlessButtonCount: 8,
+            nestedIdentifierlessButtonCount: 1,
+            nestedButtonHasTwoEmptyGroups: true,
+            composerScrollCount: 1,
+            composerIsOnlyScrollChild: true,
+            composerIsLeaf: true
+        )
+        #expect(BackgroundSendSelector.isCleanCompositionWindow(legacy))
+        #expect(!BackgroundSendSelector.isCleanCompositionWindow(
+            CompositionWindowEvidence(
+                directChildCount: legacy.directChildCount,
+                identifiedDirectChildren: legacy.identifiedDirectChildren,
+                identifierlessButtonCount: legacy.identifierlessButtonCount,
+                anonymousLeafRoles: [kAXStaticTextRole as String],
+                anonymousNonLeafCount: legacy.anonymousNonLeafCount,
+                fixedLeavesAreEmpty: legacy.fixedLeavesAreEmpty,
+                sliderHasOneAnonymousLeafValueIndicator: legacy.sliderHasOneAnonymousLeafValueIndicator,
+                emptyIdentifierlessButtonCount: legacy.emptyIdentifierlessButtonCount,
+                nestedIdentifierlessButtonCount: legacy.nestedIdentifierlessButtonCount,
+                nestedButtonHasTwoEmptyGroups: legacy.nestedButtonHasTwoEmptyGroups,
+                composerScrollCount: legacy.composerScrollCount,
+                composerIsOnlyScrollChild: legacy.composerIsOnlyScrollChild,
+                composerIsLeaf: legacy.composerIsLeaf
+            )
+        ))
     }
 
     @Test("final room proof binds the application, windows, title, composer, foreground, and body")
@@ -262,6 +388,7 @@ struct BackgroundSendSelectorTests {
             roomTitle: String = "Target",
             composerCount: Int = 1,
             composerIdentityMatches: Bool = true,
+            composerContainerIdentityMatches: Bool = true,
             composerBody: String = "exact bytes",
             foregroundApplicationUnchanged: Bool = true
         ) -> FinalRoomEvidence {
@@ -272,6 +399,7 @@ struct BackgroundSendSelectorTests {
                 roomTitle: roomTitle,
                 composerCount: composerCount,
                 composerIdentityMatches: composerIdentityMatches,
+                composerContainerIdentityMatches: composerContainerIdentityMatches,
                 composerBody: composerBody,
                 foregroundApplicationUnchanged: foregroundApplicationUnchanged
             )
@@ -280,7 +408,14 @@ struct BackgroundSendSelectorTests {
         try BackgroundSendSelector.verifyFinalRoom(
             expectedTitle: "Target",
             expectedBody: "exact bytes",
+            composerIdentityPolicy: .exactPreMutationComposer,
             evidence: valid
+        )
+        try BackgroundSendSelector.verifyFinalRoom(
+            expectedTitle: "Target",
+            expectedBody: "exact bytes",
+            composerIdentityPolicy: .structurallyAnchoredAfterMutation,
+            evidence: evidence(composerIdentityMatches: false)
         )
         let invalid = [
             evidence(applicationRunning: false),
@@ -289,6 +424,7 @@ struct BackgroundSendSelectorTests {
             evidence(roomTitle: "Wrong"),
             evidence(composerCount: 2),
             evidence(composerIdentityMatches: false),
+            evidence(composerContainerIdentityMatches: false),
             evidence(composerBody: "changed"),
             evidence(foregroundApplicationUnchanged: false),
         ]
@@ -297,9 +433,21 @@ struct BackgroundSendSelectorTests {
                 try BackgroundSendSelector.verifyFinalRoom(
                     expectedTitle: "Target",
                     expectedBody: "exact bytes",
+                    composerIdentityPolicy: .exactPreMutationComposer,
                     evidence: evidence
                 )
             }
+        }
+        #expect(throws: AutomationError.self) {
+            try BackgroundSendSelector.verifyFinalRoom(
+                expectedTitle: "Target",
+                expectedBody: "exact bytes",
+                composerIdentityPolicy: .structurallyAnchoredAfterMutation,
+                evidence: evidence(
+                    composerIdentityMatches: false,
+                    composerContainerIdentityMatches: false
+                )
+            )
         }
     }
 
@@ -397,7 +545,39 @@ struct BackgroundSendSelectorTests {
         #expect(!automator.contains("public final class KakaoAutomator"))
         #expect(!automator.contains("AXHelpers.focus(composer"))
         #expect(!automator.contains("sendEvent"))
+        #expect(!automator.contains("AXHelpers.performAction"))
+        #expect(automator.contains("AXHelpers.postTargetedReturn"))
+        #expect(automator.contains("AXHelpers.isFocused"))
+        #expect(automator.contains("AXHelpers.setMainWindow"))
+        #expect(automator.contains("AXHelpers.setFocused"))
+        #expect(!automator.contains("External background submission is disabled"))
         #expect(automator.contains("foregroundProcessID()"))
+        let eventCreation = try #require(automator.range(
+            of: "guard let returnEvents = AXHelpers.makeTargetedReturnEvents()"
+        ))
+        let post = try #require(automator.range(
+            of: "AXHelpers.postTargetedReturn(returnEvents",
+            range: eventCreation.upperBound..<automator.endIndex
+        ))
+        let finalBoundary = String(automator[eventCreation.upperBound..<post.lowerBound])
+        #expect(finalBoundary.contains("exactSendControls(in: room)"))
+        #expect(finalBoundary.contains("kAXMainAttribute"))
+        #expect(finalBoundary.contains("exactFocusedComposer("))
+        #expect(finalBoundary.contains("foregroundProcessID()"))
+        let mutationCatch = try #require(automator.range(
+            of: "if !actionAttempted, composerMutationAttempted {"
+        ))
+        let mutationCatchEnd = try #require(automator.range(
+            of: "\n            throw error",
+            range: mutationCatch.upperBound..<automator.endIndex
+        ))
+        let postMutationFailure = String(
+            automator[mutationCatch.lowerBound..<mutationCatchEnd.lowerBound]
+        )
+        #expect(postMutationFailure.contains("AutomationError.outcomeUnknown"))
+        #expect(!postMutationFailure.contains("AutomationError.preconditionFailed"))
+        #expect(helpers.contains("events.keyDown.postToPid(processIdentifier)"))
+        #expect(helpers.contains("events.keyUp.postToPid(processIdentifier)"))
         #expect(helpers.contains(
             "return children(appElement).filter { role($0) == kAXWindowRole as String }"
         ))

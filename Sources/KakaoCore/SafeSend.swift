@@ -270,8 +270,9 @@ public final class SafeSendClient: @unchecked Sendable {
                 }
             )
         } catch AutomationError.preconditionFailed(let message) {
-            // The automator proves this case occurs before submission and that
-            // any text composed by this call was safely cleared.
+            // The automator contract reserves this case for failures before
+            // any composer mutation or submit action. Every later failure is
+            // `outcomeUnknown` and keeps the durable reservation.
             try store.remove(requestID: request.requestID)
             throw AutomationError.preconditionFailed(message)
         } catch AutomationError.outcomeUnknown {

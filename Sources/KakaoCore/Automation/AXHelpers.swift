@@ -4,6 +4,11 @@ import ApplicationServices
 /// Low-level helpers for macOS Accessibility API.
 public enum AXHelpers {
 
+    struct TargetedReturnEvents {
+        let keyDown: CGEvent
+        let keyUp: CGEvent
+    }
+
     /// Get the AXUIElement for a running application by bundle identifier.
     public static func appElement(bundleId: String) throws -> AXUIElement {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first else {
@@ -44,6 +49,15 @@ public enum AXHelpers {
         guard result == .success else { return nil }
         if let num = value as? NSNumber { return num.boolValue }
         return nil
+    }
+
+    static func elementAttribute(_ element: AXUIElement, _ attr: String) -> AXUIElement? {
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(element, attr as CFString, &value)
+        guard result == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeDowncast(value, to: AXUIElement.self)
     }
 
     /// Get children of an AXUIElement.
@@ -118,16 +132,21 @@ public enum AXHelpers {
         // The current composer is the sole direct child of the certified
         // direct `_NS:47` scroll area. Avoid recursively traversing message
         // history, which is both slow and irrelevant to composition identity.
-        return children(room)
-            .filter {
-                role($0) == kAXScrollAreaRole as String && identifier($0) == "_NS:47"
-            }
-            .flatMap(children)
+        return composerContainer(in: room)
+            .map(children) ?? []
             .filter { element in
                 role(element) == kAXTextAreaRole as String
                     && identifier(element) == "_NS:51"
                     && isAttributeSettable(element, kAXValueAttribute as String)
             }
+    }
+
+    static func composerContainer(in room: AXUIElement) -> AXUIElement? {
+        guard isVerifiedRoomWindow(room) else { return nil }
+        let candidates = children(room).filter {
+            role($0) == kAXScrollAreaRole as String && identifier($0) == "_NS:47"
+        }
+        return candidates.count == 1 ? candidates[0] : nil
     }
 
     static func isCleanCompositionRoom(_ room: AXUIElement, composer: AXUIElement) -> Bool {
@@ -146,10 +165,14 @@ public enum AXHelpers {
             role($0) != kAXButtonRole as String && identifier($0) == nil
         }
         let anonymousLeaves = anonymousNonButtons.filter { children($0).isEmpty }
-        let fixedLeaves = directChildren.filter { child in
-            guard let childIdentifier = identifier(child) else { return false }
-            return ["_NS:164", "_NS:144", "_NS:10", "_NS:54", "_NS:78"]
-                .contains(childIdentifier)
+        let currentFixedIdentifiers = Set(["_NS:164", "_NS:144", "_NS:10", "_NS:54", "_NS:78"])
+        let legacyFixedIdentifiers = Set(["_NS:164", "_NS:144", "_NS:10", "_NS:30", "_NS:42", "_NS:78"])
+        let fixedLeavesAreEmpty = [currentFixedIdentifiers, legacyFixedIdentifiers].contains { identifiers in
+            let matching = directChildren.filter { child in
+                identifier(child).map(identifiers.contains) == true
+            }
+            return matching.count == identifiers.count
+                && matching.allSatisfy { children($0).isEmpty }
         }
         let sliders = directChildren.filter { identifier($0) == "_NS:182" }
         let sliderChildren = sliders.first.map(children) ?? []
@@ -182,8 +205,7 @@ public enum AXHelpers {
                 identifierlessButtonCount: identifierlessButtons.count,
                 anonymousLeafRoles: anonymousLeaves.compactMap(role),
                 anonymousNonLeafCount: anonymousNonButtons.count - anonymousLeaves.count,
-                fixedLeavesAreEmpty: fixedLeaves.count == 5
-                    && fixedLeaves.allSatisfy { children($0).isEmpty },
+                fixedLeavesAreEmpty: fixedLeavesAreEmpty,
                 sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
                 emptyIdentifierlessButtonCount: emptyButtons.count,
                 nestedIdentifierlessButtonCount: nestedButtons.count,
@@ -204,6 +226,11 @@ public enum AXHelpers {
         }
     }
 
+    static func sameElementOrder(_ lhs: [AXUIElement], _ rhs: [AXUIElement]) -> Bool {
+        lhs.count == rhs.count
+            && zip(lhs, rhs).allSatisfy { CFEqual($0, $1) }
+    }
+
     static func hasContainedFrame(_ element: AXUIElement, in container: AXUIElement) -> Bool {
         guard let elementPosition = position(element), let elementSize = size(element),
               let containerPosition = position(container), let containerSize = size(container),
@@ -222,6 +249,27 @@ public enum AXHelpers {
     /// Perform an action (e.g., press, confirm).
     public static func performAction(_ element: AXUIElement, _ action: String) -> Bool {
         AXUIElementPerformAction(element, action as CFString) == .success
+    }
+
+    static func makeTargetedReturnEvents() -> TargetedReturnEvents? {
+        guard let keyDown = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: 36,
+            keyDown: true
+        ), let keyUp = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: 36,
+            keyDown: false
+        ) else { return nil }
+        return TargetedReturnEvents(keyDown: keyDown, keyUp: keyUp)
+    }
+
+    static func postTargetedReturn(
+        _ events: TargetedReturnEvents,
+        to processIdentifier: pid_t
+    ) {
+        events.keyDown.postToPid(processIdentifier)
+        events.keyUp.postToPid(processIdentifier)
     }
 
     /// Return the actions exposed by an accessibility element.
@@ -246,6 +294,22 @@ public enum AXHelpers {
     /// Set focus on an element.
     public static func focus(_ element: AXUIElement) -> Bool {
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success
+    }
+
+    static func setMainWindow(_ window: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(
+            window,
+            kAXMainAttribute as CFString,
+            true as CFTypeRef
+        ) == .success
+    }
+
+    static func setFocused(_ element: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(
+            element,
+            kAXFocusedAttribute as CFString,
+            true as CFTypeRef
+        ) == .success
     }
 
     /// Close a window via its close button.
@@ -385,7 +449,7 @@ public enum AXHelpers {
     }
 
     public static func selfChatRows(_ table: AXUIElement) -> [AXUIElement] {
-        visibleChatRows(in: table).filter { row in
+        func isExactSelfRow(_ row: AXUIElement) -> Bool {
             // Stop at `_NS:87`: its message-preview payload may contain a
             // large attachment tree and is not stable row identity chrome.
             return chatRowIdentityChrome(row).filter {
@@ -394,11 +458,28 @@ public enum AXHelpers {
                     && (description($0) ?? "").localizedCaseInsensitiveContains("badge me")
             }.count == 1
         }
+        let visible = visibleChatRows(in: table).filter(isExactSelfRow)
+        if !visible.isEmpty { return visible }
+
+        // A manually opened self-chat can remain selected just outside the
+        // virtualized visible-row slice. Trust that fallback only when the AX
+        // table itself reports one exact selected badge-marked row.
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            table,
+            kAXSelectedRowsAttribute as CFString,
+            &value
+        ) == .success,
+        let selected = value as? [AXUIElement],
+        selected.count == 1,
+        isExactSelfRow(selected[0]) else { return [] }
+        return selected
     }
 
-    /// Sending is permitted only to a currently visible row. KakaoTalk can
-    /// expose hundreds of virtualized rows; querying every row while the app
-    /// is inactive multiplies AX timeouts and can stall for tens of seconds.
+    /// External sending is permitted only to a currently visible row. The
+    /// self-chat path has a separate exact selected badge-row fallback.
+    /// KakaoTalk can expose hundreds of virtualized rows; querying every row
+    /// while the app is inactive multiplies AX timeouts and can stall.
     private static func visibleChatRows(in table: AXUIElement) -> [AXUIElement] {
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(
@@ -524,6 +605,45 @@ public enum AXHelpers {
                     )
                 }
         ) else { return nil }
+        return candidates[0]
+    }
+
+    /// Self-chat can be opened from KakaoTalk's Friends view. Accept that
+    /// table only for self identity, when the complete stateless primary-nav
+    /// set is present and the table reports exactly one selected badge-marked
+    /// self row. This is never used for external destinations.
+    public static func verifiedSelfIdentityTable(_ window: AXUIElement) -> AXUIElement? {
+        guard role(window) == kAXWindowRole as String,
+              identifier(window) == "Main Window" else { return nil }
+        let candidates = children(window)
+            .filter { role($0) == kAXScrollAreaRole as String }
+            .flatMap(children)
+            .filter { table in
+                role(table) == kAXTableRole as String
+                    && !children(table).filter {
+                        role($0) == kAXRowRole as String
+                    }.isEmpty
+            }
+        guard candidates.count == 1 else { return nil }
+        let navigation = children(window)
+            .filter { role($0) == kAXButtonRole as String }
+            .map { element in
+                NavigationControlEvidence(
+                    role: role(element),
+                    identifier: identifier(element),
+                    title: title(element),
+                    description: description(element),
+                    selected: boolAttribute(element, kAXSelectedAttribute as String)
+                        ?? boolAttribute(element, kAXValueAttribute as String),
+                    enabled: boolAttribute(element, kAXEnabledAttribute as String)
+                )
+            }
+        guard BackgroundSendSelector.isStatelessChatsNavigationSet(navigation) else {
+            return nil
+        }
+        let selfRows = selfChatRows(candidates[0])
+        guard selfRows.count == 1,
+              isExactlySelected(selfRows[0], in: candidates[0]) else { return nil }
         return candidates[0]
     }
 

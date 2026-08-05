@@ -144,6 +144,8 @@ struct SecurityHardeningTests {
         #expect(!automator.contains("postToPid"))
         #expect(!automator.contains("selectRow"))
         #expect(!automator.contains("AXHelpers.focus"))
+        #expect(!automator.contains("AXHelpers.performAction"))
+        #expect(automator.contains("AXHelpers.postTargetedReturn"))
 
         let helpers = try String(
             contentsOf: repository.appendingPathComponent(

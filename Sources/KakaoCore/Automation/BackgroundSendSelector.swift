@@ -34,8 +34,26 @@ struct FinalRoomEvidence: Equatable {
     let roomTitle: String?
     let composerCount: Int
     let composerIdentityMatches: Bool
+    let composerContainerIdentityMatches: Bool
     let composerBody: String?
     let foregroundApplicationUnchanged: Bool
+}
+
+struct FocusedComposerEvidence: Equatable {
+    let roomChildrenMatch: Bool
+    let composerContainerMatches: Bool
+    let composerCount: Int
+    let compositionStructureCertified: Bool
+    let composerBody: String?
+    let roomIsMain: Bool
+    let focusedWindowMatchesRoom: Bool
+    let focusedUIElementMatchesComposer: Bool
+    let composerIsFocused: Bool
+}
+
+enum ComposerIdentityPolicy: Equatable {
+    case exactPreMutationComposer
+    case structurallyAnchoredAfterMutation
 }
 
 struct CompositionElementEvidence: Hashable {
@@ -60,6 +78,25 @@ struct CompositionWindowEvidence {
 }
 
 enum BackgroundSendSelector {
+    static func isCertifiedTargetedReturnBuild(version: String?, build: String?) -> Bool {
+        version == "26.6.1" && build == "1190"
+    }
+
+    static func isExactTargetFirstResponder(
+        expectedBody: String,
+        evidence: FocusedComposerEvidence
+    ) -> Bool {
+        evidence.roomChildrenMatch
+            && evidence.composerContainerMatches
+            && evidence.composerCount == 1
+            && evidence.compositionStructureCertified
+            && evidence.composerBody == expectedBody
+            && evidence.roomIsMain
+            && evidence.focusedWindowMatchesRoom
+            && evidence.focusedUIElementMatchesComposer
+            && evidence.composerIsFocused
+    }
+
     static func isSelectedChatsNavigation(_ evidence: NavigationControlEvidence) -> Bool {
         guard evidence.selected == true else { return false }
         if evidence.role == kAXCheckBoxRole as String,
@@ -122,7 +159,7 @@ enum BackgroundSendSelector {
     }
 
     static func isCleanCompositionWindow(_ evidence: CompositionWindowEvidence) -> Bool {
-        let expected = [
+        let currentExpected = [
             CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
             CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
             CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
@@ -132,20 +169,39 @@ enum BackgroundSendSelector {
             CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
             CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
         ]
-        guard evidence.directChildCount == 18,
-              evidence.identifiedDirectChildren.count == expected.count else { return false }
-        for item in expected where evidence.identifiedDirectChildren.filter({ $0 == item }).count != 1 {
-            return false
+        let legacyExpected = [
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
+            CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
+            CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
+        ]
+        func hasExactIdentifiedSet(_ expected: [CompositionElementEvidence]) -> Bool {
+            evidence.identifiedDirectChildren.count == expected.count
+                && expected.allSatisfy { item in
+                    evidence.identifiedDirectChildren.filter { $0 == item }.count == 1
+                }
         }
-        return evidence.identifierlessButtonCount == 8
+        let currentLayout = hasExactIdentifiedSet(currentExpected)
+            && evidence.identifierlessButtonCount == 8
+            && evidence.emptyIdentifierlessButtonCount == 7
             && evidence.anonymousLeafRoles.sorted() == [
                 kAXImageRole as String,
                 kAXStaticTextRole as String,
             ].sorted()
+        let legacyLayout = hasExactIdentifiedSet(legacyExpected)
+            && evidence.identifierlessButtonCount == 9
+            && evidence.emptyIdentifierlessButtonCount == 8
+            && evidence.anonymousLeafRoles.isEmpty
+        return evidence.directChildCount == 18
+            && (currentLayout || legacyLayout)
             && evidence.anonymousNonLeafCount == 0
             && evidence.fixedLeavesAreEmpty
             && evidence.sliderHasOneAnonymousLeafValueIndicator
-            && evidence.emptyIdentifierlessButtonCount == 7
             && evidence.nestedIdentifierlessButtonCount == 1
             && evidence.nestedButtonHasTwoEmptyGroups
             && evidence.composerScrollCount == 1
@@ -171,12 +227,16 @@ enum BackgroundSendSelector {
                 "Open the exact target room manually once, leave it open, then switch back to another app"
             )
         }
-        guard openRooms.count == 1,
-              openRooms[0].title == expectedTitle,
-              openRooms[0].composerCount == 1,
-              openRooms[0].composerText == "" else {
+        let targets = openRooms.filter { $0.title == expectedTitle }
+        guard targets.count == 1,
+              Set(openRooms.map(\.title)).count == openRooms.count,
+              openRooms.allSatisfy({ evidence in
+                  !evidence.title.isEmpty
+                      && evidence.composerCount == 1
+                      && evidence.composerText == ""
+              }) else {
             throw AutomationError.preconditionFailed(
-                "Only one exact target room with a provably empty composer may be reused"
+                "Every open room must be unique and structurally empty, with exactly one target room"
             )
         }
         return .reuseExactRoom
@@ -185,6 +245,7 @@ enum BackgroundSendSelector {
     static func verifyFinalRoom(
         expectedTitle: String,
         expectedBody: String,
+        composerIdentityPolicy: ComposerIdentityPolicy,
         evidence: FinalRoomEvidence
     ) throws {
         guard evidence.applicationRunning,
@@ -192,7 +253,9 @@ enum BackgroundSendSelector {
               evidence.mainWindowIdentifier == "Main Window",
               evidence.roomTitle == expectedTitle,
               evidence.composerCount == 1,
-              evidence.composerIdentityMatches,
+              evidence.composerContainerIdentityMatches,
+              evidence.composerIdentityMatches
+                || composerIdentityPolicy == .structurallyAnchoredAfterMutation,
               evidence.composerBody == expectedBody,
               evidence.foregroundApplicationUnchanged else {
             throw AutomationError.preconditionFailed(

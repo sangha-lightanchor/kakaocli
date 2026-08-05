@@ -1,7 +1,7 @@
 ---
 name: kakaocli
 description: Read KakaoTalk locally and send approved stdin to an exact chat ID or self-chat
-version: 0.7.0
+version: 0.7.1
 requires:
   binaries:
     - kakaocli
@@ -16,7 +16,8 @@ tags:
 
 Read KakaoTalk's local database and submit explicitly approved text through an
 already-rendered KakaoTalk UI. The safe sender never launches, activates, or
-raises KakaoTalk. A person must foreground it manually when needed.
+raises KakaoTalk. A person must open the exact room once, leave it open, and
+switch back to another app before sending.
 
 ## Read
 
@@ -44,14 +45,18 @@ printf '%s' 'approved message' | kakaocli send --chat-id 123456 \
 
 printf '%s' 'self test' | kakaocli send --self \
   --request-id CE6AFCE8-A013-46F2-90D8-C3BF55319B22 --json
+
+printf '%s' 'approved message' | kakaocli send --chat-id 123456 \
+  --request-id 733CD21B-D240-4D52-B747-958CCAC94408 --preflight --json
 ```
 
 The safe path accepts only `--chat-id` or `--self`, requires one certified
-current Chats table and UI/database identity, rejects unrelated rooms and
-nonempty drafts, and may reuse one exact target room with an empty certified
-composer. It never focuses the composer, keeps the foreground app unchanged,
-uses one direct verified Send control, and confirms exact new outgoing bytes
-under that same chat ID. Message bodies are limited to 64 KiB.
+current Chats table and UI/database identity, requires one exact already-open
+background target room, and rejects closed rooms, unrelated rooms, and nonempty
+drafts. Its read-only preflight runs before receipt reservation. It never
+focuses the composer, keeps the foreground app unchanged, uses one direct
+verified Send control, and confirms exact new outgoing bytes under that same
+chat ID. Message bodies are limited to 64 KiB.
 
 A group whose source `chatName` is empty is eligible only when its secure
 harvested title exactly matches the current full participant-name multiset,

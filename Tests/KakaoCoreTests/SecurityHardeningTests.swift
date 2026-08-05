@@ -139,7 +139,20 @@ struct SecurityHardeningTests {
             ),
             encoding: .utf8
         )
-        #expect(automator.contains("AXUIElementSetMessagingTimeout(app, 2.0)"))
+        #expect(automator.contains("AXUIElementSetMessagingTimeout(app, 0.5)"))
+        #expect(!automator.contains("CGEvent("))
+        #expect(!automator.contains("postToPid"))
+        #expect(!automator.contains("selectRow"))
+        #expect(!automator.contains("AXHelpers.focus"))
+
+        let helpers = try String(
+            contentsOf: repository.appendingPathComponent(
+                "Sources/KakaoCore/Automation/AXHelpers.swift"
+            ),
+            encoding: .utf8
+        )
+        #expect(helpers.contains("kAXVisibleRowsAttribute"))
+        #expect(helpers.contains("rows.count <= 64"))
     }
 
     private func createSQLiteDatabase(at url: URL) throws {

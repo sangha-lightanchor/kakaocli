@@ -26,9 +26,15 @@ struct SendCommand: ParsableCommand {
     @Flag(name: .long, help: "Validate without invoking KakaoTalk")
     var dryRun = false
 
+    @Flag(name: .long, help: "Verify the exact open background room without composing or sending")
+    var preflight = false
+
     func run() throws {
         guard (chatId != nil) != selfChat else {
             throw ValidationError("Specify exactly one of --chat-id or --self")
+        }
+        guard !(dryRun && preflight) else {
+            throw ValidationError("Specify at most one of --dry-run or --preflight")
         }
         guard let requestUUID = UUID(uuidString: requestId) else {
             throw ValidationError("--request-id must be a UUID")
@@ -75,7 +81,24 @@ struct SendCommand: ParsableCommand {
         // arguments. Normal database access derives the key in memory.
         let reader = try openDatabase(dbPath: nil, key: nil)
         defer { reader.close() }
-        let receipt = try SafeSendClient(database: reader).send(
+        let client = SafeSendClient(database: reader)
+        if preflight {
+            struct Preflight: Encodable {
+                let destination: String
+                let chatID: ChatID
+                let ready: Bool
+            }
+            let resolved = try client.preflight(destination: destination)
+            let value = Preflight(
+                destination: selfChat ? "self" : "chat:\(chatId!)",
+                chatID: resolved,
+                ready: true
+            )
+            if json { try JSONOutput.print(value) }
+            else { print("READY destination=\(value.destination) chat_id=\(resolved)") }
+            return
+        }
+        let receipt = try client.send(
             SendRequest(requestID: requestUUID, destination: destination, body: body)
         )
         if json { try JSONOutput.print(receipt) }

@@ -23,10 +23,15 @@ The package requires Homebrew SQLCipher and uses Swift Argument Parser.
   database confirmation. It operates on an already-rendered UI and must remain
   free of application activation, window raising, pointer movement, and global
   input.
+- `SafeSendClient.preflight` verifies a database-unique, visible row and one
+  already-open exact background room without composing, invoking Send, or
+  creating a receipt. First-attempt sends perform that preflight before the
+  durable unknown reservation.
 - `BackgroundSendSelector` contains pure fail-closed selection rules and is
   covered by unit tests. The send path accepts only a certified current Chats
-  table and may reuse exactly one certified target room with an empty composer;
-  unrelated rooms and drafts fail closed.
+  table and exactly one certified already-open target room with an empty
+  composer; closed rooms, foreground KakaoTalk, unrelated rooms, and drafts
+  fail closed.
 - `DatabaseReader.confirmedOutgoing` scopes confirmation to the intended
   `chat_id`, current user, log ID above the snapshot, and exact message bytes.
 - `DatabaseReader` resolves participant-named groups with an empty source

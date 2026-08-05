@@ -113,6 +113,44 @@ public final class SafeSendClient: @unchecked Sendable {
         self.confirmationDelay = max(0, confirmationDelay)
     }
 
+    /// Verify that an exact destination is ready for a background send without
+    /// composing text, invoking Send, or creating an idempotency receipt.
+    @discardableResult
+    public func preflight(destination: SendDestination) throws -> ChatID {
+        Self.processLock.lock()
+        defer { Self.processLock.unlock() }
+
+        try paths.prepare()
+        let fileLock = try SendFileLock(path: paths.lock.path)
+        try fileLock.lock()
+        defer { fileLock.unlock() }
+
+        let chat: Chat
+        switch destination {
+        case .chatID(let id):
+            guard let resolved = try database.chat(id: id.rawValue) else {
+                throw SafeSendError.chatNotFound(id)
+            }
+            chat = resolved
+        case .selfChat:
+            guard let resolved = try database.selfChat() else {
+                throw SafeSendError.selfChatNotFound
+            }
+            chat = resolved
+        }
+        guard chat.displayName != "(unknown)",
+              !chat.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SafeSendError.invalidRequest("The chat ID has no provable UI identity")
+        }
+        guard try database.chatUIIdentityCount(displayName: chat.displayName) == 1 else {
+            throw SafeSendError.invalidRequest(
+                "Chat ID \(chat.id) does not have a database-unique UI identity"
+            )
+        }
+        try automator.prepare(chat: chat)
+        return ChatID(rawValue: chat.id)
+    }
+
     public func send(_ request: SendRequest) throws -> SendReceipt {
         let body = Data(request.body.utf8)
         guard !body.isEmpty else {
@@ -192,6 +230,11 @@ public final class SafeSendClient: @unchecked Sendable {
                 "Chat ID \(chat.id) does not have a database-unique UI identity"
             )
         }
+
+        // Complete all read-only UI discovery before reserving an unknown
+        // outcome. A missing/closed room or stalled AX preflight therefore
+        // cannot poison the request ID even though no message was composed.
+        try automator.prepare(chat: chat)
 
         let highWatermark = try database.maxLogId(chatId: chat.id)
         let provisional = SendReceipt(

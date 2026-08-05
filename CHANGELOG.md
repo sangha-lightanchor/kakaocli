@@ -7,9 +7,10 @@
 - Removed foreground send mode, application activation, window raising, pointer movement, global input, positional Send-button guessing, and automatic room closing from the send path
 - Added explicit `confirmed` and `unknown` outcomes; unknown results are never retried automatically
 - Resolve self-chat window identity from the logged-in user's database name while proving the row by its unique self badge
-- Reserve request IDs before the irreversible UI action so a process crash cannot become a duplicate retry
+- Complete bounded read-only room preflight before receipt reservation, then reserve request IDs before composer mutation so a process crash cannot become a duplicate retry
 - Resolve every first-attempt destination freshly, reject database-wide duplicate UI identities, and require structural proof of the selected/current Chats table
 - Reuse only one certified exact target room with an empty composer; reject unrelated rooms, drafts, and ambiguous composition state
+- Reject closed rooms and foreground KakaoTalk instead of posting process-targeted Return; add `send --preflight` for receipt-free live readiness checks
 - Support KakaoTalk 26.x direct-window exposure, current chat-row identifiers, and stateless navigation with complete chat-row schema proof
 - Require one direct visible frame-contained Send control, remove the composer Return fallback, keep the foreground app unchanged, and re-resolve database identity immediately before Send
 - Cache only the mode-0600 source database path/user ID, derive SQLCipher keys in memory, and make expensive identity recovery explicit through `auth --refresh`
@@ -20,6 +21,7 @@
 - Require HTTPS for remote webhooks, reject URL credentials and downgrade redirects, use an ephemeral cookie-free session, and bound sync intervals
 - Persist harvested chat-name metadata atomically in a user-owned mode-0600 file and reject symlinked or corrupt state
 - Bound KakaoTalk Accessibility messaging so stalled AX calls fail closed instead of hanging indefinitely
+- Restrict send identity scans to at most 64 visible rows, reducing a live closed-room preflight from roughly 40 seconds to under one second
 - Resolve blank-name group chats only when secure harvested titles exactly match current source membership IDs, participant names, type, and count
 - Harden state and lock files against symlinks, wrong owners, and non-user permissions; give each confirmed chat/log row one durable request owner
 - Reconcile stored `unknown` attempts read-only under the same request ID without repeating UI work

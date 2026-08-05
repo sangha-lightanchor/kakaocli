@@ -362,15 +362,30 @@ public enum AXHelpers {
     }
 
     public static func exactChatRows(_ table: AXUIElement, name: String) -> [AXUIElement] {
-        children(table).filter { row in
-            guard role(row) == "AXRow" else { return false }
-            return exactRowName(row) == name
+        let rows = visibleChatRows(in: table)
+        let currentRows = rows.compactMap { row -> (AXUIElement, [AXUIElement])? in
+            let chrome = currentChatRowChrome(row)
+            return BackgroundSendSelector.isCurrentChatRowStructure(
+                currentChatRowStructure(from: chrome)
+            ) ? (row, chrome) : nil
+        }
+        if !currentRows.isEmpty {
+            return currentRows.compactMap { row, chrome in
+                let labels = chrome.filter {
+                    role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:40"
+                }
+                guard labels.count == 1,
+                      (value(labels[0]) ?? title(labels[0])) == name else { return nil }
+                return row
+            }
+        }
+        return rows.filter { row in
+            exactRowName(row) == name
         }
     }
 
     public static func selfChatRows(_ table: AXUIElement) -> [AXUIElement] {
-        children(table).filter { row in
-            guard role(row) == "AXRow" else { return false }
+        visibleChatRows(in: table).filter { row in
             // Stop at `_NS:87`: its message-preview payload may contain a
             // large attachment tree and is not stable row identity chrome.
             return chatRowIdentityChrome(row).filter {
@@ -381,8 +396,24 @@ public enum AXHelpers {
         }
     }
 
+    /// Sending is permitted only to a currently visible row. KakaoTalk can
+    /// expose hundreds of virtualized rows; querying every row while the app
+    /// is inactive multiplies AX timeouts and can stall for tens of seconds.
+    private static func visibleChatRows(in table: AXUIElement) -> [AXUIElement] {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            table,
+            kAXVisibleRowsAttribute as CFString,
+            &value
+        ) == .success,
+        let rows = value as? [AXUIElement],
+        !rows.isEmpty,
+        rows.count <= 64 else { return [] }
+        return rows.filter { role($0) == kAXRowRole as String }
+    }
+
     public static func exactRowName(_ row: AXUIElement) -> String? {
-        let chrome = chatRowIdentityChrome(row)
+        let chrome = currentChatRowChrome(row)
         let currentLabels = chrome.filter {
             role($0) == kAXStaticTextRole as String && identifier($0) == "_NS:40"
         }
@@ -406,6 +437,15 @@ public enum AXHelpers {
               let name = value(legacyLabels[0]) ?? title(legacyLabels[0]),
               !name.isEmpty else { return nil }
         return name
+    }
+
+    /// KakaoTalk 26.x exposes destination identity as direct children of one
+    /// row cell. Prefer this bounded shape in the send path so a long chat
+    /// list cannot multiply AX timeouts through recursive preview traversal.
+    private static func currentChatRowChrome(_ row: AXUIElement) -> [AXUIElement] {
+        let cells = children(row).filter { role($0) == kAXCellRole as String }
+        guard cells.count == 1 else { return [] }
+        return children(cells[0])
     }
 
     private static func chatRowIdentityChrome(_ row: AXUIElement) -> [AXUIElement] {
@@ -480,7 +520,7 @@ public enum AXHelpers {
                 && children(candidates[0]).contains { row in
                     guard role(row) == kAXRowRole as String else { return false }
                     return BackgroundSendSelector.isCurrentChatRowStructure(
-                        currentChatRowStructure(from: chatRowIdentityChrome(row))
+                        currentChatRowStructure(from: currentChatRowChrome(row))
                     )
                 }
         ) else { return nil }

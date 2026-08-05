@@ -33,14 +33,9 @@ struct BackgroundSendSelectorTests {
         }
     }
 
-    @Test("opens only one exact visible row")
+    @Test("closed rooms and ambiguous rows fail before composition")
     func rowIdentity() throws {
-        #expect(try BackgroundSendSelector.preparation(
-            expectedTitle: "Target",
-            openRooms: [],
-            matchingRowCount: 1
-        ) == .openExactRow)
-        for count in [0, 2, 3] {
+        for count in [0, 1, 2, 3] {
             #expect(throws: AutomationError.self) {
                 try BackgroundSendSelector.preparation(
                     expectedTitle: "Target",
@@ -388,6 +383,8 @@ struct BackgroundSendSelectorTests {
             "kAXRaiseAction",
             "CGWarpMouseCursorPosition",
             ".post(tap:",
+            "postToPid",
+            "CGEvent(keyboardEventSource",
             "CGEvent(mouseEventSource",
             "/usr/bin/security",
         ] {

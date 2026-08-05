@@ -8,8 +8,10 @@ the already-rendered KakaoTalk UI. Treat sending as an irreversible action.
 - macOS 14+ and KakaoTalk for Mac.
 - Homebrew SQLCipher (`brew install sqlcipher`).
 - Full Disk Access for database reads and Accessibility permission for sends.
-- KakaoTalk must already be running with its main window rendered. A person may
-  foreground it; `send` never launches, activates, or raises it.
+- KakaoTalk must already be running with its main window and the exact target
+  room rendered. A person may open that room once, leave it open, and switch
+  back to another app. `send` requires KakaoTalk to be in the background and
+  never launches, activates, or raises it.
 
 ## Read commands
 
@@ -38,6 +40,10 @@ printf '%s' 'message' | kakaocli send --chat-id 123456 \
 
 printf '%s' 'self test' | kakaocli send --self \
   --request-id CE6AFCE8-A013-46F2-90D8-C3BF55319B22 --json
+
+# Read-only UI readiness check; does not compose, send, or create a receipt
+printf '%s' 'approved message' | kakaocli send --chat-id 123456 \
+  --request-id 733CD21B-D240-4D52-B747-958CCAC94408 --preflight --json
 ```
 
 The safe send path:
@@ -50,16 +56,18 @@ The safe send path:
 - permits a participant-named group with an empty source `chatName` only when
   its secure harvested title has the same complete name multiset, chat type,
   and member count as the current `displayMemberIds` and `NTUser` rows;
-- may reuse exactly one open target room only when its current Kakao room and
+- requires exactly one already-open target room whose current Kakao room and
   composition structure are certified and its composer is provably empty;
 - never activates or raises KakaoTalk, moves the pointer, or posts global input;
-- opens a closed exact row with a Kakao-PID-targeted Return event, aborting if
-  the foreground app changes, and submits only through the same direct,
-  visible, frame-contained Accessibility Send control;
+- fails before receipt reservation when the exact room is closed, KakaoTalk is
+  foreground, or the exact row is not in the bounded visible-row set;
+- completes a read-only UI preflight before receipt reservation, and submits
+  only through the same direct, visible, frame-contained Accessibility Send
+  control captured by that preflight;
 - never focuses the composer and proves the foreground app remains unchanged
   through composition and the Send action;
-- bounds KakaoTalk Accessibility messaging calls so a stalled AX server fails
-  closed instead of hanging indefinitely;
+- bounds KakaoTalk Accessibility messaging calls and scans at most 64 visible
+  rows so a stalled or virtualized AX tree fails closed quickly;
 - re-resolves the destination database identity immediately before Send;
 - confirms the exact UTF-8 bytes as a new outgoing row under the intended
   `chat_id` before returning `confirmed`;
@@ -72,9 +80,10 @@ Message bodies are limited to 64 KiB of UTF-8 and `send` never accepts a
 database key in process arguments.
 
 Reusing a request ID returns its stored receipt. Reusing it with different
-contents is rejected. A precondition failure before composer mutation is safe
-to correct and retry with the same request ID. Any uncertainty after composer
-mutation is durably `unknown` and must not trigger another UI attempt.
+contents is rejected. A preflight failure creates no receipt. A later
+precondition failure is retryable with the same request ID only when the exact
+draft was proven cleared. Any remaining uncertainty after composer mutation is
+durably `unknown` and must not trigger another UI attempt.
 
 ## Development and release checks
 

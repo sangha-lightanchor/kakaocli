@@ -199,6 +199,56 @@ struct SafeSendClientTests {
         #expect(ui.calls == 2)
     }
 
+    @Test("preflight failure never creates an unknown reservation")
+    func preflightFailureIsRetryable() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = MockSendDatabase(chat: target)
+        database.confirmedLogID = 106
+        let ui = MockSubmitter()
+        ui.prepareError = AutomationError.preconditionFailed("target room is closed")
+        let client = makeClient(database: database, ui: ui, root: root)
+        let request = SendRequest(
+            requestID: UUID(),
+            destination: .chatID(ChatID(rawValue: target.id)),
+            body: "preflight is harmless"
+        )
+
+        #expect(throws: AutomationError.self) { try client.send(request) }
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 0)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("send-receipts.json").path
+        ))
+
+        ui.prepareError = nil
+        #expect(try client.send(request).status == .confirmed)
+        #expect(ui.prepareCalls == 2)
+        #expect(ui.calls == 1)
+    }
+
+    @Test("explicit preflight performs no submit and creates no receipt")
+    func explicitPreflightIsReadOnly() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ui = MockSubmitter()
+        let client = makeClient(
+            database: MockSendDatabase(chat: target),
+            ui: ui,
+            root: root
+        )
+
+        let resolved = try client.preflight(
+            destination: .chatID(ChatID(rawValue: target.id))
+        )
+        #expect(resolved.rawValue == target.id)
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 0)
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("send-receipts.json").path
+        ))
+    }
+
     @Test("request IDs cannot be reused with different content")
     func requestConflict() throws {
         let root = temporaryDirectory()
@@ -443,9 +493,16 @@ private final class MockSendDatabase: SafeSendDatabase, @unchecked Sendable {
 }
 
 private final class MockSubmitter: KakaoSubmitting, @unchecked Sendable {
+    var prepareCalls = 0
     var calls = 0
+    var prepareError: Error?
     var error: Error?
     var beforeIdentityCheck: (() -> Void)?
+
+    func prepare(chat _: Chat) throws {
+        prepareCalls += 1
+        if let prepareError { throw prepareError }
+    }
 
     func submit(
         chat _: Chat,
@@ -464,6 +521,8 @@ private final class ConcurrentSubmitter: KakaoSubmitting, @unchecked Sendable {
     private var active = 0
     private(set) var calls = 0
     private(set) var maximumConcurrentCalls = 0
+
+    func prepare(chat _: Chat) throws {}
 
     func submit(
         chat _: Chat,

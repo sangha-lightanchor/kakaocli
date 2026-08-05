@@ -8,7 +8,6 @@ struct OpenRoomEvidence: Equatable {
 }
 
 enum RoomPreparation: Equatable {
-    case openExactRow
     case reuseExactRoom
 }
 
@@ -167,8 +166,10 @@ enum BackgroundSendSelector {
             )
         }
 
-        if openRooms.isEmpty {
-            return .openExactRow
+        guard !openRooms.isEmpty else {
+            throw AutomationError.preconditionFailed(
+                "Open the exact target room manually once, leave it open, then switch back to another app"
+            )
         }
         guard openRooms.count == 1,
               openRooms[0].title == expectedTitle,

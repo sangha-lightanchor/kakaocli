@@ -3,6 +3,11 @@ import ApplicationServices
 import Foundation
 
 protocol KakaoSubmitting: AnyObject, Sendable {
+    /// Verify and capture the exact already-open background room without
+    /// composing text or invoking any control. This phase is safe to repeat
+    /// and must complete before a durable unknown receipt is reserved.
+    func prepare(chat: Chat) throws
+
     /// A precondition error proves that no send action was invoked and any
     /// body written by this call was safely removed. All later uncertainty is
     /// reported as `outcomeUnknown` so callers never retry the UI action.
@@ -18,48 +23,68 @@ protocol KakaoSubmitting: AnyObject, Sendable {
 final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
     static let bundleId = "com.kakao.KakaoTalkMac"
 
+    private struct PreparedSend {
+        let chat: Chat
+        let application: NSRunningApplication
+        let app: AXUIElement
+        let mainWindow: AXUIElement
+        let room: AXUIElement
+        let table: AXUIElement
+        let row: AXUIElement
+        let composer: AXUIElement
+        let sendControl: AXUIElement
+        let windows: [AXUIElement]
+        let roomChildren: [AXUIElement]
+        let foregroundProcessID: pid_t
+    }
+
+    private let preparedLock = NSLock()
+    private var preparedSend: PreparedSend?
+
     init() {}
 
-    /// Submit a message to a database-resolved chat. Database confirmation and
-    /// durable request idempotency are handled by the caller.
-    func submit(
-        chat: Chat,
-        message: String,
-        finalIdentityCheck: () throws -> Void
-    ) throws {
-        guard !message.isEmpty else {
-            throw AutomationError.preconditionFailed("Message cannot be empty")
-        }
+    /// Capture a send-ready room while KakaoTalk remains in the background.
+    /// Closed rooms are deliberately rejected: KakaoTalk exposes no exact
+    /// inactive row action that can open one without activation or global
+    /// keyboard/mouse input.
+    func prepare(chat: Chat) throws {
+        preparedLock.lock()
+        preparedSend = nil
+        preparedLock.unlock()
+
         let runningApps = NSRunningApplication.runningApplications(
             withBundleIdentifier: Self.bundleId
         ).filter { !$0.isTerminated }
         guard runningApps.count == 1, let runningApp = runningApps.first else {
             throw AutomationError.preconditionFailed(
                 runningApps.isEmpty
-                    ? "KakaoTalk is not running; foreground it manually"
+                    ? "KakaoTalk is not running; open it manually"
                     : "Multiple KakaoTalk processes are running; the exact process is ambiguous"
             )
         }
-        guard let initialFrontmostProcessID = NSWorkspace.shared.frontmostApplication?
-            .processIdentifier else {
+        guard let initialFrontmostProcessID = foregroundProcessID() else {
             throw AutomationError.preconditionFailed("The foreground application could not be verified")
         }
+        guard initialFrontmostProcessID != runningApp.processIdentifier else {
+            throw AutomationError.preconditionFailed(
+                "KakaoTalk must be in the background before sending; switch back to another app"
+            )
+        }
 
-        let processID = runningApp.processIdentifier
-        let app = AXUIElementCreateApplication(processID)
-        guard AXUIElementSetMessagingTimeout(app, 2.0) == .success else {
+        let app = AXUIElementCreateApplication(runningApp.processIdentifier)
+        guard AXUIElementSetMessagingTimeout(app, 0.5) == .success else {
             throw AutomationError.preconditionFailed(
                 "KakaoTalk Accessibility messaging could not be safely bounded"
             )
         }
-        var windows = AXHelpers.windows(app)
+        let windows = AXHelpers.windows(app)
         let mainWindows = windows.filter {
             AXHelpers.role($0) == kAXWindowRole as String
                 && AXHelpers.identifier($0) == "Main Window"
         }
         guard mainWindows.count == 1, let mainWindow = mainWindows.first else {
             throw AutomationError.preconditionFailed(
-                "KakaoTalk's main window is not rendered; foreground it manually"
+                "KakaoTalk's main window is not rendered; open it manually once"
             )
         }
         guard let table = AXHelpers.verifiedSendChatListTable(mainWindow) else {
@@ -67,11 +92,7 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 "KakaoTalk's selected Chats tab and chat list could not be structurally verified"
             )
         }
-
         let rows = matchingRows(in: table, chat: chat)
-        // Kakao labels the self row as "My Chat"/"나와의 채팅", while the
-        // opened window uses the database-resolved current-user display name.
-        let expectedTitle = chat.displayName
         let roomWindows = windows.filter { !CFEqual($0, mainWindow) }
         guard roomWindows.allSatisfy(AXHelpers.isVerifiedRoomWindow) else {
             throw AutomationError.preconditionFailed(
@@ -86,93 +107,26 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 composerText: composers.first.flatMap(AXHelpers.value)
             )
         }
-        let preparation = try BackgroundSendSelector.preparation(
-            expectedTitle: expectedTitle,
+        _ = try BackgroundSendSelector.preparation(
+            expectedTitle: chat.displayName,
             openRooms: evidence,
             matchingRowCount: rows.count
         )
-
-        guard let row = rows.first else {
-            throw AutomationError.preconditionFailed("The chat list changed during destination resolution")
-        }
-        let room: AXUIElement
-        switch preparation {
-        case .reuseExactRoom:
-            guard roomWindows.count == 1, let exactRoom = roomWindows.first else {
-                throw AutomationError.preconditionFailed("The exact target room changed before reuse")
-            }
-            room = exactRoom
-        case .openExactRow:
-            guard AXHelpers.selectRow(row, in: table) else {
-                throw AutomationError.preconditionFailed(
-                    "The exact destination row could not be verified as selected"
-                )
-            }
-            guard foregroundProcessID() == initialFrontmostProcessID else {
-                throw AutomationError.preconditionFailed(
-                    "The foreground application changed while selecting the destination"
-                )
-            }
-            guard AXHelpers.focus(table), AXHelpers.isFocused(table) else {
-                throw AutomationError.preconditionFailed("The chat list did not retain focus")
-            }
-            guard foregroundProcessID() == initialFrontmostProcessID else {
-                throw AutomationError.preconditionFailed(
-                    "The foreground application changed while opening the destination"
-                )
-            }
-            guard let openEvent = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
-                  let openRelease = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else {
-                throw AutomationError.preconditionFailed("Could not create the KakaoTalk-targeted Return event")
-            }
-
-            let currentWindows = AXHelpers.windows(app)
-            let currentTable = AXHelpers.verifiedSendChatListTable(mainWindow)
-            let currentRows = currentTable.map { matchingRows(in: $0, chat: chat) } ?? []
-            guard isOnlyExactApplication(runningApp),
-                  foregroundProcessID() == initialFrontmostProcessID,
-                  currentWindows.count == 1,
-                  currentWindows.first.map({ CFEqual($0, mainWindow) }) == true,
-                  let currentTable,
-                  CFEqual(currentTable, table),
-                  currentRows.count == 1,
-                  currentRows.first.map({ CFEqual($0, row) }) == true,
-                  AXHelpers.isExactlySelected(row, in: currentTable),
-                  AXHelpers.isFocused(currentTable) else {
-                throw AutomationError.preconditionFailed(
-                    "Destination selection changed before the room was opened"
-                )
-            }
-            openEvent.postToPid(processID)
-            openRelease.postToPid(processID)
-
-            room = try waitForExactRoom(
-                app: app,
-                mainWindow: mainWindow,
-                expectedTitle: expectedTitle,
-                application: runningApp,
-                initialFrontmostProcessID: initialFrontmostProcessID
+        guard rows.count == 1, let row = rows.first,
+              roomWindows.count == 1, let room = roomWindows.first else {
+            throw AutomationError.preconditionFailed(
+                "Open the exact target room manually once, leave it open, then switch back to another app"
             )
         }
-
-        windows = AXHelpers.windows(app)
-        guard isOnlyExactApplication(runningApp),
-              foregroundProcessID() == initialFrontmostProcessID,
-              windows.count == 2,
-              windows.contains(where: { CFEqual($0, mainWindow) }),
-              windows.contains(where: { CFEqual($0, room) }),
-              AXHelpers.isVerifiedRoomWindow(room) else {
-            throw AutomationError.preconditionFailed("An unrelated room appeared before composition")
+        guard AXHelpers.title(room) == chat.displayName else {
+            throw AutomationError.preconditionFailed(
+                "The open room title does not exactly match the destination"
+            )
         }
-        guard AXHelpers.title(room) == expectedTitle else {
-            throw AutomationError.preconditionFailed("The target room title does not exactly match the destination")
-        }
-
         let composers = AXHelpers.composerCandidates(in: room)
-        guard composers.count == 1 else {
+        guard composers.count == 1, let composer = composers.first else {
             throw AutomationError.preconditionFailed("The target does not expose one exact composer")
         }
-        let composer = composers[0]
         guard AXHelpers.value(composer)?.isEmpty == true else {
             throw AutomationError.preconditionFailed("The target room contains an unsent draft")
         }
@@ -181,14 +135,88 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
                 "The target room contains queued or structurally ambiguous composition state"
             )
         }
-        let expectedWindows = windows
-        let expectedRoomChildren = AXHelpers.children(room)
-        let preflightControls = sendControlCandidates(in: room)
-        guard preflightControls.count == 1, let preflightControl = preflightControls.first else {
+        let roomChildren = AXHelpers.children(room)
+        let controls = sendControlCandidates(in: room)
+        guard controls.count == 1, let sendControl = controls.first else {
             throw AutomationError.preconditionFailed(
                 "The exact target room does not expose one unambiguous Send control"
             )
         }
+        guard finalRoomIsVerified(
+            application: runningApp,
+            app: app,
+            mainWindow: mainWindow,
+            room: room,
+            table: table,
+            row: row,
+            chat: chat,
+            expectedTitle: chat.displayName,
+            composer: composer,
+            body: "",
+            expectedWindows: windows,
+            expectedRoomChildren: roomChildren,
+            initialFrontmostProcessID: initialFrontmostProcessID
+        ) else {
+            throw AutomationError.preconditionFailed(
+                "The exact room, row, or composer container changed during preflight"
+            )
+        }
+
+        preparedLock.lock()
+        preparedSend = PreparedSend(
+            chat: chat,
+            application: runningApp,
+            app: app,
+            mainWindow: mainWindow,
+            room: room,
+            table: table,
+            row: row,
+            composer: composer,
+            sendControl: sendControl,
+            windows: windows,
+            roomChildren: roomChildren,
+            foregroundProcessID: initialFrontmostProcessID
+        )
+        preparedLock.unlock()
+    }
+
+    /// Submit a message to a database-resolved chat. Database confirmation and
+    /// durable request idempotency are handled by the caller.
+    func submit(
+        chat: Chat,
+        message: String,
+        finalIdentityCheck: () throws -> Void
+    ) throws {
+        guard !message.isEmpty else {
+            throw AutomationError.preconditionFailed("Message cannot be empty")
+        }
+        preparedLock.lock()
+        let prepared = preparedSend
+        preparedSend = nil
+        preparedLock.unlock()
+        guard let prepared,
+              prepared.chat.id == chat.id,
+              prepared.chat.type == chat.type,
+              prepared.chat.displayName == chat.displayName,
+              prepared.chat.memberCount == chat.memberCount,
+              prepared.chat.isSelfChat == chat.isSelfChat else {
+            throw AutomationError.preconditionFailed(
+                "The exact target room was not successfully preflighted"
+            )
+        }
+        let runningApp = prepared.application
+        let app = prepared.app
+        let mainWindow = prepared.mainWindow
+        let room = prepared.room
+        let table = prepared.table
+        let row = prepared.row
+        let composer = prepared.composer
+        let preflightControl = prepared.sendControl
+        let expectedTitle = chat.displayName
+        let expectedWindows = prepared.windows
+        let expectedRoomChildren = prepared.roomChildren
+        let initialFrontmostProcessID = prepared.foregroundProcessID
+
         guard finalRoomIsVerified(
             application: runningApp,
             app: app,
@@ -212,6 +240,13 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
         var actionAttempted = false
         var composerMutationAttempted = false
         do {
+            do {
+                try finalIdentityCheck()
+            } catch {
+                throw AutomationError.preconditionFailed(
+                    "The destination database identity changed after preflight"
+                )
+            }
             composerMutationAttempted = true
             guard AXHelpers.setValue(composer, message), AXHelpers.value(composer) == message else {
                 throw AutomationError.preconditionFailed("The composer did not accept the exact message")
@@ -290,8 +325,28 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             }
         } catch {
             if !actionAttempted, composerMutationAttempted {
-                if AXHelpers.value(composer) == message {
-                    _ = AXHelpers.setValue(composer, "")
+                let cleared = AXHelpers.value(composer) == message
+                    && AXHelpers.setValue(composer, "")
+                    && AXHelpers.value(composer) == ""
+                    && finalRoomIsVerified(
+                        application: runningApp,
+                        app: app,
+                        mainWindow: mainWindow,
+                        room: room,
+                        table: table,
+                        row: row,
+                        chat: chat,
+                        expectedTitle: expectedTitle,
+                        composer: composer,
+                        body: "",
+                        expectedWindows: expectedWindows,
+                        expectedRoomChildren: expectedRoomChildren,
+                        initialFrontmostProcessID: initialFrontmostProcessID
+                    )
+                if cleared {
+                    throw AutomationError.preconditionFailed(
+                        "The send precondition changed after composition; the exact draft was cleared"
+                    )
                 }
                 throw AutomationError.outcomeUnknown(
                     "Composer mutation began; the result is unknown and must not be retried automatically"
@@ -299,37 +354,6 @@ final class KakaoAutomator: KakaoSubmitting, @unchecked Sendable {
             }
             throw error
         }
-    }
-
-    private func waitForExactRoom(
-        app: AXUIElement,
-        mainWindow: AXUIElement,
-        expectedTitle: String,
-        application: NSRunningApplication,
-        initialFrontmostProcessID: pid_t
-    ) throws -> AXUIElement {
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-            guard isOnlyExactApplication(application),
-                  foregroundProcessID() == initialFrontmostProcessID else {
-                throw AutomationError.preconditionFailed(
-                    "KakaoTalk or the foreground application changed while opening the room"
-                )
-            }
-            let rooms = AXHelpers.windows(app).filter { !CFEqual($0, mainWindow) }
-            if rooms.count == 1 {
-                guard AXHelpers.isVerifiedRoomWindow(rooms[0]),
-                      AXHelpers.title(rooms[0]) == expectedTitle else {
-                    throw AutomationError.preconditionFailed("The newly opened room has the wrong title")
-                }
-                return rooms[0]
-            }
-            if rooms.count > 1 {
-                throw AutomationError.preconditionFailed("Multiple rooms opened for one destination")
-            }
-        }
-        throw AutomationError.preconditionFailed("The verified destination did not open")
     }
 
     private func matchingRows(in table: AXUIElement, chat: Chat) -> [AXUIElement] {

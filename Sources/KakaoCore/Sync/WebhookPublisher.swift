@@ -42,7 +42,7 @@ public final class WebhookPublisher: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("kakaocli/0.7.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("kakaocli/0.7.1", forHTTPHeaderField: "User-Agent")
         request.httpBody = body
 
         nonisolated(unsafe) var success = false

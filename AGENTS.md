@@ -50,25 +50,33 @@ The safe send path:
 
 - accepts only `--chat-id` or `--self`; names and substring matches are rejected;
 - serializes the whole transaction across threads and processes;
-- requires a database-unique display identity and the structurally verified,
-  selected/current Chats table, and rejects duplicate UI rows, unrelated open
-  rooms, nonempty drafts, ambiguous composers, and wrong window titles;
+- requires a database-unique display identity and the structurally verified
+  current Chats table for external destinations; self-chat may also
+  use one exact badge-marked selected row in the structurally verified Friends
+  identity table;
 - permits a participant-named group with an empty source `chatName` only when
   its secure harvested title has the same complete name multiset, chat type,
   and member count as the current `displayMemberIds` and `NTUser` rows;
-- requires exactly one already-open target room whose current Kakao room and
-  composition structure are certified and its composer is provably empty;
+- requires exactly one already-open target room; every open room must have a
+  unique nonempty title, certified current-or-legacy Kakao 26.x composition
+  chrome, and one provably empty composer, and unrelated rooms are snapshotted
+  and must remain unchanged and unfocused;
 - never activates or raises KakaoTalk, moves the pointer, or posts global input;
 - fails before receipt reservation when the exact room is closed, KakaoTalk is
-  foreground, or the exact row is not in the bounded visible-row set;
+  foreground, or the external row is not in the bounded visible-row set;
 - completes a read-only UI preflight before receipt reservation, and submits
-  only through the same direct, visible, frame-contained Accessibility Send
-  control captured by that preflight;
-- never focuses the composer and proves the foreground app remains unchanged
-  through composition and the Send action;
+  only after the same direct, visible, frame-contained Accessibility Send
+  control captured by that preflight remains exact; the control is identity
+  evidence and is never pressed;
+- is pinned to KakaoTalk `26.6.1 (1190)`, sets only the exact room/composer as
+  Kakao's internal main window and first responder, then posts Return only to
+  KakaoTalk's exact PID; the operating-system foreground app must remain
+  unchanged before and after every mutation;
+- permits Kakao to re-instantiate the composer only under the same exact
+  container, child order, certified chrome, focused state, and exact body;
 - bounds KakaoTalk Accessibility messaging calls and scans at most 64 visible
   rows so a stalled or virtualized AX tree fails closed quickly;
-- re-resolves the destination database identity immediately before Send;
+- re-resolves the destination database identity immediately before Return;
 - confirms the exact UTF-8 bytes as a new outgoing row under the intended
   `chat_id` before returning `confirmed`;
 - records `unknown` durably when submission may have happened but confirmation
@@ -81,9 +89,10 @@ database key in process arguments.
 
 Reusing a request ID returns its stored receipt. Reusing it with different
 contents is rejected. A preflight failure creates no receipt. A later
-precondition failure is retryable with the same request ID only when the exact
-draft was proven cleared. Any remaining uncertainty after composer mutation is
-durably `unknown` and must not trigger another UI attempt.
+precondition failure is retryable only when it occurred before any composer
+mutation. Every failure after composer mutation is durably `unknown`, even if
+best-effort cleanup proves the composer empty, and must not trigger another UI
+attempt.
 
 ## Development and release checks
 

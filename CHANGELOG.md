@@ -9,10 +9,22 @@
 - Resolve self-chat window identity from the logged-in user's database name while proving the row by its unique self badge
 - Complete bounded read-only room preflight before receipt reservation, then reserve request IDs before composer mutation so a process crash cannot become a duplicate retry
 - Resolve every first-attempt destination freshly, reject database-wide duplicate UI identities, and require structural proof of the selected/current Chats table
-- Reuse only one certified exact target room with an empty composer; reject unrelated rooms, drafts, and ambiguous composition state
-- Reject closed rooms and foreground KakaoTalk instead of posting process-targeted Return; add `send --preflight` for receipt-free live readiness checks
+- Reuse one certified exact target room while permitting only uniquely titled,
+  certified, empty, snapshotted unrelated rooms that remain unchanged and
+  unfocused; reject drafts and ambiguous composition state
+- Reject closed rooms and foreground KakaoTalk; add `send --preflight` for
+  receipt-free live readiness checks
 - Support KakaoTalk 26.x direct-window exposure, current chat-row identifiers, and stateless navigation with complete chat-row schema proof
-- Require one direct visible frame-contained Send control, remove the composer Return fallback, keep the foreground app unchanged, and re-resolve database identity immediately before Send
+- Pin background submission to the self-chat-certified KakaoTalk 26.6.1 (1190)
+  build, set only the exact target room/composer as Kakao's internal
+  main window/first responder, and post Return only to KakaoTalk's PID while
+  proving the OS foreground app remains unchanged
+- Retain one direct visible frame-contained Send control as identity/stability
+  evidence without pressing it, support tightly anchored transient composer
+  re-instantiation, and re-resolve database identity immediately before Return
+- Support both certified current and legacy KakaoTalk 26.x room chrome variants
+- Permit self-chat identity through one exact selected badge-marked Friends row
+  when the complete Friends/Chats/More navigation and table shape are proven
 - Cache only the mode-0600 source database path/user ID, derive SQLCipher keys in memory, and make expensive identity recovery explicit through `auth --refresh`
 - Stop `status` from querying the legacy credential Keychain or causing an unrelated permission prompt
 - Stop self-chat and composer discovery at certified UI containers instead of recursively scanning message previews/history
@@ -25,6 +37,8 @@
 - Resolve blank-name group chats only when secure harvested titles exactly match current source membership IDs, participant names, type, and count
 - Harden state and lock files against symlinks, wrong owners, and non-user permissions; give each confirmed chat/log row one durable request owner
 - Reconcile stored `unknown` attempts read-only under the same request ID without repeating UI work
+- Keep every post-composition failure durably `unknown`, even when best-effort
+  cleanup empties the composer, closing a duplicate-retry race
 - Limit send bodies to 64 KiB and remove source-database keys from send-process arguments
 - Return durable `unknown` for unclassified UI or confirmation failures after
   reservation, and fsync the receipt directory entry before reporting success

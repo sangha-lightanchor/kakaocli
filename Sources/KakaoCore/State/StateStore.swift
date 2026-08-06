@@ -183,6 +183,11 @@ public final class StateStore: SendStateStoring, @unchecked Sendable {
         guard receipt.status == .confirmed, let logID = receipt.logID else {
             throw KakaoClientError.state("A confirmed send claim requires a log ID")
         }
+        guard logID > 0, logID < Int64.max else {
+            throw KakaoClientError.state(
+                "A transient or invalid Kakao log ID cannot confirm a send"
+            )
+        }
         mutex.lock()
         defer { mutex.unlock() }
         return try transactionValue {
@@ -850,6 +855,13 @@ public final class StateStore: SendStateStoring, @unchecked Sendable {
         if try !hasColumn(table: "webhook_outbox", name: "lease_until") {
             try execute("ALTER TABLE webhook_outbox ADD COLUMN lease_until REAL")
         }
+        // KakaoTalk can expose Int64.max as a temporary local outgoing-row ID
+        // before replacing it with the durable server log ID. Older builds
+        // could persist that placeholder as confirmed. Demote those attempts
+        // so replay with the same UUID performs read-only reconciliation only.
+        try execute(
+            "UPDATE send_attempts SET log_id = NULL, status = 'unknown' WHERE log_id = 9223372036854775807"
+        )
         // Older state databases did not enforce exclusive confirmed-log
         // ownership. Preserve the earliest owner and fail closed for any
         // duplicate historical claims before adding the durable constraint.

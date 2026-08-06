@@ -4,11 +4,13 @@ import Foundation
 
 public enum SendUIError: Error, CustomStringConvertible, Equatable {
     case preconditionFailed(String)
+    case needsUserOpen(String)
     case outcomeUnknown(String)
 
     public var description: String {
         switch self {
         case .preconditionFailed(let message), .outcomeUnknown(let message): return message
+        case .needsUserOpen(let message): return "needs_user_open: \(message)"
         }
     }
 }
@@ -21,8 +23,9 @@ public protocol KakaoSendUI: AnyObject, Sendable {
 }
 
 public protocol KakaoRoomPreparing: AnyObject, Sendable {
-    /// Make the exact database-resolved room reusable without composing or
-    /// invoking a Send control. This phase is safe to repeat after failure.
+    /// Bind one already-open exact database-resolved room without composing or
+    /// invoking a Send control. A closed room returns `needs_user_open`; this
+    /// phase never activates or navigates KakaoTalk.
     func prepare(chat: Chat) throws -> RoomWarmupStatus
 }
 
@@ -165,7 +168,7 @@ struct CompositionWindowEvidence: Sendable {
 
 enum CompositionWindowValidator {
     static func isClean(_ evidence: CompositionWindowEvidence) -> Bool {
-        let expected = [
+        let currentExpected = [
             CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
             CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
             CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
@@ -175,22 +178,39 @@ enum CompositionWindowValidator {
             CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
             CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
         ]
-        guard evidence.directChildCount == 18,
-              evidence.identifiedDirectChildren.count == expected.count else { return false }
-        for element in expected {
-            guard evidence.identifiedDirectChildren.filter({ $0 == element }).count == 1 else {
-                return false
-            }
+        let legacyExpected = [
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
+            CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
+            CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
+            CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
+            CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
+        ]
+        func hasExactIdentifiedSet(_ expected: [CompositionElementEvidence]) -> Bool {
+            evidence.identifiedDirectChildren.count == expected.count
+                && expected.allSatisfy { item in
+                    evidence.identifiedDirectChildren.filter { $0 == item }.count == 1
+                }
         }
-        return evidence.identifierlessButtonCount == 8
+        let currentLayout = hasExactIdentifiedSet(currentExpected)
+            && evidence.identifierlessButtonCount == 8
+            && evidence.emptyIdentifierlessButtonCount == 7
             && evidence.anonymousLeafRoles.sorted() == [
                 kAXImageRole as String,
                 kAXStaticTextRole as String,
             ].sorted()
+        let legacyLayout = hasExactIdentifiedSet(legacyExpected)
+            && evidence.identifierlessButtonCount == 9
+            && evidence.emptyIdentifierlessButtonCount == 8
+            && evidence.anonymousLeafRoles.isEmpty
+        guard evidence.directChildCount == 18 else { return false }
+        return (currentLayout || legacyLayout)
             && evidence.anonymousNonLeafCount == 0
             && evidence.fixedLeavesAreEmpty
             && evidence.sliderHasOneAnonymousLeafValueIndicator
-            && evidence.emptyIdentifierlessButtonCount == 7
             && evidence.nestedIdentifierlessButtonCount == 1
             && evidence.nestedButtonHasTwoEmptyGroups
             && evidence.composerScrollCount == 1
@@ -295,7 +315,8 @@ public enum SendUIValidator {
     ) throws {
         guard evidence.applicationRunning,
               evidence.exactWindowSet,
-              evidence.mainWindowIdentifier == "Main Window",
+              evidence.mainWindowIdentifier == nil
+                || evidence.mainWindowIdentifier == "Main Window",
               evidence.roomTitle == expectedTitle,
               evidence.composerCount == 1,
               evidence.composerIdentityMatches,
@@ -309,15 +330,16 @@ public enum SendUIValidator {
 }
 
 /// Safe UI transport. It operates only on an already-running KakaoTalk process
-/// with a rendered main window and one already-open exact target room. It never
-/// mutates Accessibility focus or posts keyboard/mouse input; the only send
-/// action is AXPress on one exact verified Send/전송 control.
+/// and one already-open exact target room. An exact room already certified by
+/// the database-unique display identity can be reused with or without the main
+/// Chats window. It never mutates Accessibility focus or posts keyboard/mouse
+/// input; the only send action is AXPress on one exact verified Send/전송 control.
 final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
     KakaoIdentityRecheckingSendUI, @unchecked Sendable {
     static let bundleIdentifier = "com.kakao.KakaoTalkMac"
-    private let roomWarmup = ForegroundRoomWarmup()
+    private let roomBinding = OpenRoomBinding()
     private let preparedIdentityLock = NSLock()
-    private var preparedIdentity: PreparedRoomWarmup?
+    private var preparedIdentity: PreparedOpenRoomBinding?
 
     private struct UnrelatedRoomSnapshot {
         let window: AXUIElement
@@ -329,9 +351,9 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
 
     func prepare(chat: Chat) throws -> RoomWarmupStatus {
         preparedIdentityLock.withLock { preparedIdentity = nil }
-        let prepared = try roomWarmup.prepare(chat: chat)
+        let prepared = try roomBinding.bind(chat: chat)
         preparedIdentityLock.withLock { preparedIdentity = prepared }
-        return prepared.status
+        return .alreadyOpen
     }
 
     func submit(chat: Chat, body: String) throws {
@@ -356,7 +378,7 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
                     : "Multiple KakaoTalk processes are running; the exact process is ambiguous"
             )
         }
-        guard let prepared = preparedIdentityLock.withLock({ () -> PreparedRoomWarmup? in
+        guard let prepared = preparedIdentityLock.withLock({ () -> PreparedOpenRoomBinding? in
             defer { preparedIdentity = nil }
             return preparedIdentity
         }), chat.id == prepared.chatID,
@@ -366,7 +388,7 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         application.bundleIdentifier == prepared.bundleIdentifier,
         application.launchDate == prepared.launchDate else {
             throw SendUIError.preconditionFailed(
-                "KakaoTalk's process identity changed after exact-room warm-up"
+                "KakaoTalk's process identity changed after exact-room binding"
             )
         }
         let processID = application.processIdentifier
@@ -375,7 +397,7 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         }
         guard initialFrontmostProcessID == prepared.foregroundProcessID else {
             throw SendUIError.preconditionFailed(
-                "The foreground application changed after exact-room warm-up"
+                "The foreground application changed after exact-room binding"
             )
         }
         let appElement = AXUIElementCreateApplication(processID)
@@ -383,30 +405,12 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         let mainWindows = windows.filter {
             AXHelpers.identifier($0) == "Main Window"
         }
-        guard mainWindows.count == 1, let mainWindow = mainWindows.first else {
-            throw SendUIError.preconditionFailed("KakaoTalk's main window is not rendered; foreground it manually")
+        guard mainWindows.count <= 1 else {
+            throw SendUIError.preconditionFailed("Multiple KakaoTalk main windows are rendered")
         }
-
-        let roomWindows = windows.filter { !CFEqual($0, mainWindow) }
-        let table: AXUIElement
-        switch AXHelpers.chatListResolution(in: mainWindow) {
-        case .verified(let verifiedTable):
-            table = verifiedTable
-        case .navigationUnverified:
-            throw SendUIError.preconditionFailed(
-                "KakaoTalk's Chats navigation could not be structurally verified"
-            )
-        case .tableUnverified:
-            throw SendUIError.preconditionFailed(
-                "KakaoTalk's current chat-list rows could not be structurally verified"
-            )
-        }
-        let rows = AXHelpers.matchingRows(in: table, chat: chat)
-        guard rows.count == 1, let verifiedRow = rows.first else {
-            let message = rows.isEmpty
-                ? "The exact destination row is not visible"
-                : "The destination label matches multiple UI rows"
-            throw SendUIError.preconditionFailed(message)
+        let mainWindow = mainWindows.first
+        let roomWindows = windows.filter { window in
+            mainWindow.map { !CFEqual(window, $0) } ?? true
         }
         // For self-chat, row identity is proven by Kakao's unique self badge;
         // the room title is the database-resolved current-user display name,
@@ -419,14 +423,6 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         }) else {
             throw SendUIError.preconditionFailed(
                 "A non-room or structurally ambiguous KakaoTalk window is open"
-            )
-        }
-        let roomEvidence = roomWindows.map { window in
-            let composers = AXHelpers.composerCandidates(in: window)
-            return OpenRoomEvidence(
-                title: AXHelpers.title(window) ?? "",
-                composerCount: composers.count,
-                composerText: composers.first.flatMap(AXHelpers.value) ?? ""
             )
         }
         let unrelatedRooms = roomWindows.filter { AXHelpers.title($0) != expectedTitle }
@@ -444,37 +440,15 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
                 "An unrelated room identity could not be stably snapshotted"
             )
         }
-
-        let preparation = try SendUIValidator.preparation(
-            expectedTitle: expectedTitle,
-            openRooms: roomEvidence,
-            matchingRowCount: rows.count
-        )
-
-        let room: AXUIElement
-        switch preparation {
-        case .reuse:
-            let matchingRooms = roomWindows.filter { AXHelpers.title($0) == expectedTitle }
-            guard matchingRooms.count == 1, let exactRoom = matchingRooms.first,
-                  let currentTable = AXHelpers.chatList(in: mainWindow),
-                  CFEqual(currentTable, table) else {
-                throw SendUIError.preconditionFailed(
-                    "The exact open target room or chat list changed during verification"
-                )
-            }
-            let currentRows = AXHelpers.matchingRows(in: currentTable, chat: chat)
-            guard currentRows.count == 1,
-                  let currentRow = currentRows.first,
-                  CFEqual(verifiedRow, currentRow),
-                  AXHelpers.sameElementSet(AXHelpers.windows(appElement), windows) else {
-                throw SendUIError.preconditionFailed(
-                    "The destination identity or window set changed before room reuse"
-                )
-            }
-            room = exactRoom
-        case .openExactRow:
+        let matchingRooms = roomWindows.filter { AXHelpers.title($0) == expectedTitle }
+        guard !matchingRooms.isEmpty else {
+            throw SendUIError.needsUserOpen(
+                "Chat ID \(chat.id.rawValue) is no longer open; open it in KakaoTalk and retry"
+            )
+        }
+        guard matchingRooms.count == 1, let room = matchingRooms.first else {
             throw SendUIError.preconditionFailed(
-                "The exact target room is not prepared; run the exact-ID room warm-up before sending"
+                "The exact prepared target room is not uniquely rendered"
             )
         }
 
@@ -500,9 +474,6 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
               finalRoomIsVerified(
                   application: application,
                   appElement: appElement,
-                  mainWindow: mainWindow,
-                  table: table,
-                  row: verifiedRow,
                   chat: chat,
                   room: room,
                   expectedTitle: expectedTitle,
@@ -550,9 +521,6 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
                 guard finalRoomIsVerified(
                     application: application,
                     appElement: appElement,
-                    mainWindow: mainWindow,
-                    table: table,
-                    row: verifiedRow,
                     chat: chat,
                     room: room,
                     expectedTitle: expectedTitle,
@@ -579,9 +547,6 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
                       finalRoomIsVerified(
                           application: application,
                           appElement: appElement,
-                          mainWindow: mainWindow,
-                          table: table,
-                          row: verifiedRow,
                           chat: chat,
                           room: room,
                           expectedTitle: expectedTitle,
@@ -632,9 +597,6 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
     private func finalRoomIsVerified(
         application: NSRunningApplication,
         appElement: AXUIElement,
-        mainWindow: AXUIElement,
-        table: AXUIElement,
-        row: AXUIElement,
         chat: Chat,
         room: AXUIElement,
         expectedTitle: String,
@@ -647,26 +609,28 @@ final class SafeKakaoSender: KakaoSendUI, KakaoRoomPreparing,
         initialFrontmostProcessID: pid_t
     ) -> Bool {
         let windows = AXHelpers.windows(appElement)
+        let mainWindows = windows.filter { AXHelpers.identifier($0) == "Main Window" }
+        let roomWindows = windows.filter { window in
+            mainWindows.first.map { !CFEqual(window, $0) } ?? true
+        }
         let composers = AXHelpers.composerCandidates(in: room)
-        let currentTable = AXHelpers.chatList(in: mainWindow)
-        let currentRows = currentTable.map { AXHelpers.matchingRows(in: $0, chat: chat) } ?? []
+        let matchingRooms = roomWindows.filter { AXHelpers.title($0) == expectedTitle }
         let compositionUnchanged = CFEqual(room, compositionContainer)
             && AXHelpers.sameElementSet(AXHelpers.children(room), expectedCompositionChildren)
             && isCleanCompositionWindow(room, composer: composer)
         let evidence = FinalRoomEvidence(
             applicationRunning: isOnlyExactApplication(application),
             exactWindowSet: AXHelpers.sameElementSet(windows, expectedWindows)
-                && windows.contains(where: { CFEqual($0, mainWindow) })
+                && mainWindows.count <= 1
                 && windows.contains(where: { CFEqual($0, room) })
-                && windows.filter { !CFEqual($0, mainWindow) }
-                    .allSatisfy(AXHelpers.isVerifiedRoomWindow)
+                && roomWindows.allSatisfy(AXHelpers.isVerifiedRoomWindow)
                 && unrelatedRoomsAreUnchanged(unrelatedRooms),
-            mainWindowIdentifier: AXHelpers.identifier(mainWindow),
+            mainWindowIdentifier: mainWindows.first.flatMap(AXHelpers.identifier),
             roomTitle: AXHelpers.isVerifiedRoomWindow(room) ? AXHelpers.title(room) : nil,
             composerCount: composers.count,
-            composerIdentityMatches: currentTable.map({ CFEqual($0, table) }) == true
-                && currentRows.count == 1
-                && currentRows.first.map({ CFEqual($0, row) }) == true
+            composerIdentityMatches: mainWindows.count <= 1
+                && matchingRooms.count == 1
+                && matchingRooms.first.map({ CFEqual($0, room) }) == true
                 && composers.first.map({ CFEqual($0, composer) }) == true
                 && compositionUnchanged,
             composerBody: AXHelpers.value(composer),

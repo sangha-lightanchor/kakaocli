@@ -5,7 +5,7 @@ import KakaoCore
 struct SendCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "send",
-        abstract: "Warm the exact room if needed, then safely send stdin"
+        abstract: "Safely send stdin through one already-open exact room"
     )
 
     @Option(name: .long, help: "Exact chat ID")

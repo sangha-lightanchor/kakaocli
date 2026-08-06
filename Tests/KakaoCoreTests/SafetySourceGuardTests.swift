@@ -3,7 +3,7 @@ import Testing
 
 @Suite("Safety source guard")
 struct SafetySourceGuardTests {
-    @Test("restricted warm-up primitives exist only in the dedicated source")
+    @Test("room binding cannot activate or navigate KakaoTalk")
     func forbiddenCalls() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let root = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -11,10 +11,8 @@ struct SafetySourceGuardTests {
         let files = FileManager.default.enumerator(at: sourceRoot, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" } ?? []
-        let warmup = sourceRoot.appendingPathComponent(
-            "KakaoCore/Automation/ForegroundRoomWarmup.swift"
-        ).standardizedFileURL
-        let alwaysForbidden = [
+        let forbidden = [
+            ".activate(",
             "activateIgnoringOtherApps",
             "activateAllWindows",
             "kAXRaiseAction",
@@ -22,6 +20,8 @@ struct SafetySourceGuardTests {
             "kAXFocusedWindowAttribute",
             "kAXFocusedAttribute",
             "kAXSelectedRowsAttribute",
+            "kAXShowMenuAction",
+            "kAXCancelAction",
             "makeKeyAndOrderFront",
             "orderFront",
             "orderFrontRegardless",
@@ -58,69 +58,26 @@ struct SafetySourceGuardTests {
             "LocalAuthentication",
             "SecItem",
         ]
-        let warmupOnly = [
-            ".activate(",
-        ]
         for file in files {
             let contents = try String(contentsOf: file, encoding: .utf8)
-            for token in alwaysForbidden {
+            for token in forbidden {
                 #expect(!contents.contains(token), "Forbidden token \(token) in \(file.lastPathComponent)")
-            }
-            if file.standardizedFileURL != warmup {
-                for token in warmupOnly {
-                    #expect(!contents.contains(token), "Warm-up token \(token) escaped into \(file.path)")
-                }
             }
         }
 
-        let contents = try String(contentsOf: warmup, encoding: .utf8)
-        #expect(contents.components(separatedBy: ".activate(").count - 1 == 2)
-        #expect(contents.components(separatedBy: "AXHelpers.perform(").count - 1 == 3)
-        #expect(contents.components(separatedBy: "kAXShowMenuAction").count - 1 == 2)
-        #expect(contents.components(separatedBy: "kAXPressAction").count - 1 == 2)
-        #expect(contents.components(separatedBy: "kAXCancelAction").count - 1 == 2)
-        #expect(contents.contains("kakao.application.activate(options: [])"))
-        #expect(contents.contains("prior.application.activate(options: [])"))
-        #expect(contents.contains("AXHelpers.perform(rowCell, kAXShowMenuAction as String)"))
-        #expect(contents.contains("AXHelpers.perform(openItem, kAXPressAction as String)"))
-        #expect(contents.contains("ChatTab_Rightclick_GoChatRoom"))
-        #expect(contents.contains("bundle.localizedString("))
-        #expect(!contents.contains("for localization in bundle.localizations"))
-        #expect(contents.contains("application.isActive"))
-        #expect(contents.contains("baseline.rooms.allSatisfy({ room in"))
-        #expect(contents.contains("AXHelpers.isCleanCompositionRoom(room.window, composer: room.composer)"))
-        #expect(contents.components(separatedBy: "restore(prior: prior, from: kakao)").count - 1 == 2)
-        #expect(contents.contains("verifyOpenedRoomAfterRestoration("))
-        #expect(contents.contains("activationAttempts < 3"))
-        let foregroundOrder = [
-            "kakao.application.activate(options: [])",
-            "waitForFrontmost(kakao",
-            "return try openExactRoom(",
-            "restore(prior: prior, from: kakao)",
-        ]
-        let menuOrder = [
-            "AXHelpers.perform(rowCell, kAXShowMenuAction as String)",
-            "waitForNewMenu(",
-            "AXHelpers.perform(openItem, kAXPressAction as String)",
-            "waitForExactNewRoom(",
-        ]
-        for orderedTokens in [foregroundOrder, menuOrder] {
-            var lowerBound = contents.startIndex
-            for token in orderedTokens {
-                guard let range = contents.range(of: token, range: lowerBound..<contents.endIndex) else {
-                    Issue.record("Warm-up ordering token is missing: \(token)")
-                    return
-                }
-                lowerBound = range.upperBound
-            }
-        }
+        let binding = sourceRoot.appendingPathComponent(
+            "KakaoCore/Automation/OpenRoomBinding.swift"
+        )
+        let contents = try String(contentsOf: binding, encoding: .utf8)
         for token in [
-            "AXHelpers.setValue", "AXUIElementSetAttributeValue", "AXUIElementPerformAction",
-            "kAXValueAttribute", "sendControlCandidates", "SendRequest", "CGEvent",
-            "postToPid", "keyboardSetUnicodeString", "setIntegerValueField", ".flags"
+            "AXHelpers.setValue", "AXHelpers.perform", "SendRequest",
+            "sendControlCandidates", "body: String"
         ] {
-            #expect(!contents.contains(token), "Warm-up source contains delivery capability \(token)")
+            #expect(!contents.contains(token), "Open-room binding contains delivery token \(token)")
         }
+        #expect(contents.contains("SendUIError.needsUserOpen("))
+        #expect(contents.contains("foregroundUnchanged:"))
+        #expect(contents.contains("AXHelpers.sameElementSet(windows, initialWindows)"))
     }
 
     @Test("background sender is control-only")
@@ -136,7 +93,9 @@ struct SafetySourceGuardTests {
         #expect(contents.contains("AXHelpers.perform(control, kAXPressAction"))
         #expect(contents.contains("let controls = waitForExactSendControls("))
         #expect(contents.contains("timeout: 2"))
-        #expect(contents.contains("run the exact-ID room warm-up"))
+        #expect(contents.contains("private let roomBinding = OpenRoomBinding()"))
+        #expect(!contents.contains("ForegroundRoomWarmup"))
+        #expect(!contents.contains("RowIdentitySnapshot"))
         #expect(contents.contains("AXHelpers.isCleanCompositionRoom(room, composer: composer)"))
         #expect(contents.contains("guard evidence.directChildCount == 18"))
         for identifier in [
@@ -175,7 +134,6 @@ struct SafetySourceGuardTests {
         let sourceRoot = root.appendingPathComponent("Sources")
         let helpers = sourceRoot.appendingPathComponent("KakaoCore/Automation/AXHelpers.swift")
         let sender = sourceRoot.appendingPathComponent("KakaoCore/Automation/SafeKakaoSender.swift")
-        let warmup = sourceRoot.appendingPathComponent("KakaoCore/Automation/ForegroundRoomWarmup.swift")
         let files = FileManager.default.enumerator(at: sourceRoot, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" } ?? []
@@ -189,12 +147,10 @@ struct SafetySourceGuardTests {
             #expect(!contents.contains("AXUIElementSetAttributeValue("))
         }
 
-        let warmupContents = try String(contentsOf: warmup, encoding: .utf8)
-        #expect(warmupContents.components(separatedBy: "AXHelpers.perform(").count - 1 == 3)
         let senderContents = try String(contentsOf: sender, encoding: .utf8)
         #expect(senderContents.components(separatedBy: "AXHelpers.perform(").count - 1 == 1)
         #expect(senderContents.components(separatedBy: "AXHelpers.setValue(").count - 1 == 2)
-        for file in files where ![warmup, sender].map(\.standardizedFileURL).contains(file.standardizedFileURL) {
+        for file in files where file.standardizedFileURL != sender.standardizedFileURL {
             let contents = try String(contentsOf: file, encoding: .utf8)
             #expect(!contents.contains("AXHelpers.perform("))
             #expect(!contents.contains("AXHelpers.setValue("))
@@ -216,6 +172,15 @@ struct SafetySourceGuardTests {
         #expect(!contents.contains("Keychain"))
         #expect(!contents.contains("LAContext"))
         #expect(!contents.contains("SecItem"))
+
+        let stateStore = root.appendingPathComponent("Sources/KakaoCore/State/StateStore.swift")
+        let stateContents = try String(contentsOf: stateStore, encoding: .utf8)
+        #expect(stateContents.contains(
+            "WHERE log_id = 9223372036854775807"
+        ))
+        #expect(stateContents.contains(
+            "guard logID > 0, logID < Int64.max"
+        ))
     }
 
     @Test("public send remains synchronously actor-isolated")
@@ -243,6 +208,7 @@ struct SafetySourceGuardTests {
         let helpers = root.appendingPathComponent("Sources/KakaoCore/Automation/AXHelpers.swift")
         let contents = try String(contentsOf: helpers, encoding: .utf8)
         #expect(contents.contains("kAXWindowsAttribute"))
+        #expect(contents.contains("declared.allSatisfy({ role($0) == kAXWindowRole as String })"))
         #expect(contents.contains("children(app).filter"))
         #expect(contents.contains("kAXWindowRole"))
         #expect(!contents.contains("NSRunningApplication"))

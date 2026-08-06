@@ -4,7 +4,7 @@ import KakaoCore
 struct WarmupCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "warmup",
-        abstract: "Open one exact chat-ID room without composing or sending"
+        abstract: "Verify one already-open exact room without composing or sending"
     )
 
     @Option(name: .long, help: "Exact chat ID")

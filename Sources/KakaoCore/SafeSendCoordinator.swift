@@ -23,7 +23,7 @@ public final class SafeSendCoordinator: @unchecked Sendable {
         self.state = state
         self.ui = ui
         // Existing callers that pass a dual-purpose transport keep automatic
-        // warm-up without needing to adopt a new initializer argument.
+        // already-open-room binding without adopting a new initializer argument.
         self.roomPreparer = roomPreparer ?? (ui as? KakaoRoomPreparing)
         self.transactionLock = transactionLock
         self.confirmationAttempts = max(1, confirmationAttempts)
@@ -74,17 +74,22 @@ public final class SafeSendCoordinator: @unchecked Sendable {
             do {
                 _ = try roomPreparer.prepare(chat: initialChat)
             } catch let error as SendUIError {
-                throw KakaoClientError.uiPrecondition(error.description)
+                switch error {
+                case .needsUserOpen(let message):
+                    throw KakaoClientError.needsUserOpen(message)
+                case .preconditionFailed, .outcomeUnknown:
+                    throw KakaoClientError.uiPrecondition(error.description)
+                }
             } catch {
                 throw KakaoClientError.uiPrecondition(
-                    "Room warm-up failed before any message was composed or sent"
+                    "Room binding failed before any message was composed or sent"
                 )
             }
         }
         let chat = try resolveVerifiedChat(request.destination)
         guard hasSameUIIdentity(chat, initialChat) else {
             throw KakaoClientError.uiPrecondition(
-                "The destination database identity changed during room warm-up"
+                "The destination database identity changed during room binding"
             )
         }
 
@@ -120,6 +125,9 @@ public final class SafeSendCoordinator: @unchecked Sendable {
             }
         } catch let error as SendUIError {
             switch error {
+            case .needsUserOpen(let message):
+                try state.removeSendAttempt(requestID: request.requestID)
+                throw KakaoClientError.needsUserOpen(message)
             case .preconditionFailed(let message):
                 // SafeKakaoSender guarantees that this case occurs before a
                 // submit action and clears any text it composed.
@@ -179,22 +187,27 @@ public final class SafeSendCoordinator: @unchecked Sendable {
 
         let chat = try resolveVerifiedChat(destination)
         guard let roomPreparer else {
-            throw KakaoClientError.uiPrecondition("This client has no room warm-up transport")
+            throw KakaoClientError.uiPrecondition("This client has no open-room binding transport")
         }
         do {
             let status = try roomPreparer.prepare(chat: chat)
             let current = try resolveVerifiedChat(destination)
             guard hasSameUIIdentity(current, chat) else {
                 throw KakaoClientError.uiPrecondition(
-                    "The destination database identity changed during room warm-up"
+                    "The destination database identity changed during room binding"
                 )
             }
             return RoomWarmupReceipt(chatID: current.id, status: status)
         } catch let error as SendUIError {
-            throw KakaoClientError.uiPrecondition(error.description)
+            switch error {
+            case .needsUserOpen(let message):
+                throw KakaoClientError.needsUserOpen(message)
+            case .preconditionFailed, .outcomeUnknown:
+                throw KakaoClientError.uiPrecondition(error.description)
+            }
         } catch {
             throw KakaoClientError.uiPrecondition(
-                "Room warm-up failed before any message was composed or sent"
+                "Room binding failed before any message was composed or sent"
             )
         }
     }

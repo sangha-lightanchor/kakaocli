@@ -23,7 +23,7 @@ printf '%s' 'self-chat test' | \
   kakaocli send --self --stdin --request-id "$(uuidgen)" --json
 ```
 
-To prepare a room without composing or sending:
+To verify a room is already open without composing or sending:
 
 ```bash
 kakaocli warmup --chat-id 123456 --json
@@ -35,19 +35,24 @@ Treat `confirmed` as delivered only after its `log_id` is present. Treat
 request ID. Repeating the exact request with the same request ID performs
 read-only reconciliation and never invokes another UI action.
 
-KakaoTalk must already be running with its main window rendered. If either is
-unavailable, ask the user to open KakaoTalk once; never add or invent a
-`--foreground` option.
+KakaoTalk must already be running. An already-open exact target room can be
+reused whether the main Chats window is rendered or hidden. Its separate room
+window must remain open continuously while background send capability is
+needed; opening it is not a permanent one-time setup. If the exact room is
+closed or KakaoTalk restarts, the command returns `needs_user_open`; reopen the
+room manually, leave it open, and retry. Never add or invent a `--foreground`
+option.
 
-When the exact target room is closed, `send` automatically runs the no-message
-warm-up first. It may briefly activate KakaoTalk, open only the exact
-database-resolved row, and restore the prior app. The room can then be reused
-without manual reopening until that room is closed or KakaoTalk restarts.
-Other structurally verified rooms remain untouched. If the target is already
-open, unrelated drafts are left unchanged; if foreground warm-up is needed, it
-fails before activation while any other room has a draft or queued/ambiguous
-composition state. The strict sender itself remains background/control-only
-and uses only the exact target room's verified Send control.
+`send` binds the database-unique identity directly to one strict exact-title
+room. It never activates KakaoTalk or navigates the main chat list. Other
+structurally verified rooms remain untouched, unrelated drafts are left
+unchanged, and no main-window row is required. An empty target composer may
+wait up to five seconds for KakaoTalk's immediate post-send controls to settle;
+a non-empty composer or identity change fails closed.
+The strict sender itself is control-only and uses only the exact target room's
+verified Send control without changing the foreground application.
+Window discovery accepts only exact `AXWindow` objects, including when KakaoTalk
+temporarily returns malformed non-window objects through `AXWindows`.
 
 If local database identity has not been cached, run `kakaocli auth --refresh`
 once. Normal reads never request the Kakao SQLCipher key from Keychain. Do not

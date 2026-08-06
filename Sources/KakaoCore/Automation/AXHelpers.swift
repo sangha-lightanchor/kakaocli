@@ -2,9 +2,9 @@ import ApplicationServices
 import Foundation
 
 /// Accessibility helpers intentionally limited to element inspection, direct
-/// value mutation, and actions on already-rendered KakaoTalk controls. The
-/// narrowly scoped foreground room warm-up owns only exact row-menu discovery;
-/// keyboard, focus, and selection mutation are prohibited everywhere.
+/// value mutation, and actions on already-rendered KakaoTalk controls.
+/// Activation, room navigation, keyboard input, focus mutation, and selection
+/// mutation are prohibited everywhere.
 enum AXHelpers {
     enum ChatListResolution {
         case verified(AXUIElement)
@@ -39,10 +39,16 @@ enum AXHelpers {
 
     static func windows(_ app: AXUIElement) -> [AXUIElement] {
         let declared = attribute(app, kAXWindowsAttribute as String) as? [AXUIElement] ?? []
-        if !declared.isEmpty { return declared }
+        // KakaoTalk can transiently return AXApplication objects (including
+        // duplicates of itself) through AXWindows after a room closes. Never
+        // treat a merely non-empty attribute as a window set.
+        if !declared.isEmpty,
+           declared.allSatisfy({ role($0) == kAXWindowRole as String }) {
+            return declared
+        }
 
-        // Current KakaoTalk can return an empty AXWindows array while inactive
-        // even though its rendered windows remain direct application children.
+        // Current KakaoTalk can return an empty or malformed AXWindows array
+        // while its rendered windows remain direct application children.
         // Accept only direct AXWindow children; never search arbitrary
         // descendants or make the application active to repopulate AXWindows.
         return children(app).filter { role($0) == kAXWindowRole as String }
@@ -232,10 +238,15 @@ enum AXHelpers {
             role($0) != kAXButtonRole as String && identifier($0) == nil
         }
         let anonymousLeaves = anonymousNonButtons.filter { self.children($0).isEmpty }
-        let fixedLeaves = children.filter { child in
-            guard let identifier = identifier(child) else { return false }
-            return ["_NS:164", "_NS:144", "_NS:10", "_NS:54", "_NS:78"]
-                .contains(identifier)
+        let currentFixedIdentifiers = Set(["_NS:164", "_NS:144", "_NS:10", "_NS:54", "_NS:78"])
+        let legacyFixedIdentifiers = Set(["_NS:164", "_NS:144", "_NS:10", "_NS:30", "_NS:42", "_NS:78"])
+        let fixedLeavesAreEmpty = [currentFixedIdentifiers, legacyFixedIdentifiers].contains {
+            identifiers in
+            let matching = children.filter { child in
+                identifier(child).map(identifiers.contains) == true
+            }
+            return matching.count == identifiers.count
+                && matching.allSatisfy { self.children($0).isEmpty }
         }
         let sliders = children.filter { identifier($0) == "_NS:182" }
         let sliderChild = sliders.first.flatMap { self.children($0).only }
@@ -263,8 +274,7 @@ enum AXHelpers {
             identifierlessButtonCount: identifierlessButtons.count,
             anonymousLeafRoles: anonymousLeaves.compactMap { role($0) },
             anonymousNonLeafCount: anonymousNonButtons.count - anonymousLeaves.count,
-            fixedLeavesAreEmpty: fixedLeaves.count == 5
-                && fixedLeaves.allSatisfy({ self.children($0).isEmpty }),
+            fixedLeavesAreEmpty: fixedLeavesAreEmpty,
             sliderHasOneAnonymousLeafValueIndicator: sliderIsClean,
             emptyIdentifierlessButtonCount: emptyButtons.count,
             nestedIdentifierlessButtonCount: nestedButtons.count,

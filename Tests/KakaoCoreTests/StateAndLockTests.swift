@@ -97,6 +97,55 @@ struct StateAndLockTests {
         #expect(try reopened.sendAttempt(requestID: secondID)?.receipt.status == .unknown)
     }
 
+    @Test("transient sentinel confirmation is rejected and stays reconcilable")
+    func transientReceiptRejection() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("state.sqlite3").path
+        let key = String(repeating: "e", count: 64)
+        let requestID = UUID()
+        let body = Data("pending".utf8)
+
+        do {
+            let state = try StateStore(path: path, key: key, archiveRoot: root.path)
+            try state.saveSendAttempt(
+                destinationKey: "chat:7",
+                bodySHA256: "pending-hash",
+                body: body,
+                highWatermark: 6,
+                receipt: SendReceipt(
+                    requestID: requestID,
+                    chatID: ChatID(rawValue: 7),
+                    logID: nil,
+                    status: .unknown
+                )
+            )
+            #expect(throws: KakaoClientError.self) {
+                try state.claimConfirmedSendAttempt(
+                    destinationKey: "chat:7",
+                    bodySHA256: "pending-hash",
+                    body: body,
+                    highWatermark: 6,
+                    receipt: SendReceipt(
+                        requestID: requestID,
+                        chatID: ChatID(rawValue: 7),
+                        logID: Int64.max,
+                        status: .confirmed
+                    )
+                )
+            }
+            state.close()
+        }
+
+        let reopened = try StateStore(path: path, key: key, archiveRoot: root.path)
+        defer { reopened.close() }
+        let stored = try reopened.sendAttempt(requestID: requestID)
+        #expect(stored?.receipt.status == .unknown)
+        #expect(stored?.receipt.logID == nil)
+        #expect(stored?.body == body)
+        #expect(stored?.highWatermark == 6)
+    }
+
     @Test("flock excludes another process for the whole transaction")
     func crossProcessLock() throws {
         let root = temporaryDirectory()

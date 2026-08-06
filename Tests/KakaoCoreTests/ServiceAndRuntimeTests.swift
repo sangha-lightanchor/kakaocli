@@ -225,6 +225,33 @@ struct ServiceAndRuntimeTests {
         #expect(!FileManager.default.fileExists(atPath: cache.path))
     }
 
+    @Test("transient outgoing sentinel is never confirmation or a high-water mark")
+    func transientOutgoingSentinel() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("source.sqlite3")
+        try createServiceDatabase(at: databaseURL)
+        try executeSQLite(
+            at: databaseURL,
+            sql: """
+                INSERT INTO NTChatMessage VALUES(10, 7, 1, X'63616e6f6e6963616c', 1, 1, NULL);
+                INSERT INTO NTChatMessage VALUES(9223372036854775807, 7, 1, X'70656e64696e67', 1, 2, NULL);
+                """
+        )
+        let reader = DatabaseReader(databasePath: databaseURL.path)
+        try reader.open()
+        defer { reader.close() }
+
+        #expect(try reader.maxLogID(chatID: ChatID(rawValue: 7)) == 10)
+        #expect(try reader.maxLogID(chatID: nil) == 10)
+        #expect(try reader.confirmedOutgoing(
+            chatID: ChatID(rawValue: 7), body: Data("canonical".utf8), after: 9
+        ) == 10)
+        #expect(try reader.confirmedOutgoing(
+            chatID: ChatID(rawValue: 7), body: Data("pending".utf8), after: 10
+        ) == nil)
+    }
+
     @Test("state key is a durable user-only 32-byte hex secret")
     func stateKeyFile() throws {
         let root = temporaryDirectory()
@@ -418,12 +445,16 @@ private func temporaryDirectory() -> URL {
 }
 
 private func createServiceDatabase(at url: URL) throws {
+    try executeSQLite(
+        at: url,
+        sql: "CREATE TABLE NTChatMessage(logId INTEGER PRIMARY KEY, chatId INTEGER, authorId INTEGER, message BLOB, type INTEGER, sentAt INTEGER, attachment TEXT); CREATE TABLE NTChatContext(userId INTEGER); INSERT INTO NTChatContext VALUES(1);"
+    )
+}
+
+private func executeSQLite(at url: URL, sql: String) throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-    process.arguments = [
-        url.path,
-        "CREATE TABLE NTChatMessage(logId INTEGER PRIMARY KEY, chatId INTEGER, authorId INTEGER, message BLOB, type INTEGER, sentAt INTEGER, attachment TEXT); CREATE TABLE NTChatContext(userId INTEGER); INSERT INTO NTChatContext VALUES(1);",
-    ]
+    process.arguments = [url.path, sql]
     let errors = Pipe()
     process.standardOutput = FileHandle.nullDevice
     process.standardError = errors

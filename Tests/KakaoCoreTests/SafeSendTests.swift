@@ -131,6 +131,11 @@ struct SafeSendTests {
     @Test("clean composition fingerprint rejects queued and nested state")
     func cleanCompositionFingerprint() {
         #expect(CompositionWindowValidator.isClean(cleanCompositionEvidence()))
+        #expect(CompositionWindowValidator.isClean(cleanCompositionEvidence(
+            identifiedDirectChildren: legacyCertifiedCompositionElements,
+            anonymousLeafRoles: [],
+            emptyButtonCount: 8
+        )))
         #expect(!CompositionWindowValidator.isClean(cleanCompositionEvidence(
             directChildCount: 21
         )))
@@ -285,11 +290,27 @@ struct SafeSendTests {
             expectedBody: "exact body",
             evidence: valid
         )
+        try SendUIValidator.verifyFinalRoom(
+            expectedTitle: "Exact Room",
+            expectedBody: "exact body",
+            evidence: FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: true,
+                mainWindowIdentifier: nil, roomTitle: "Exact Room",
+                composerCount: 1, composerIdentityMatches: true,
+                composerBody: "exact body", frontmostApplicationUnchanged: true
+            )
+        )
 
         let changed = [
             FinalRoomEvidence(
                 applicationRunning: true, exactWindowSet: false,
                 mainWindowIdentifier: "Main Window", roomTitle: "Exact Room",
+                composerCount: 1, composerIdentityMatches: true,
+                composerBody: "exact body", frontmostApplicationUnchanged: true
+            ),
+            FinalRoomEvidence(
+                applicationRunning: true, exactWindowSet: true,
+                mainWindowIdentifier: "Other", roomTitle: "Exact Room",
                 composerCount: 1, composerIdentityMatches: true,
                 composerBody: "exact body", frontmostApplicationUnchanged: true
             ),
@@ -357,14 +378,14 @@ struct SafeSendTests {
         #expect(ui.calls == 1)
     }
 
-    @Test("automatic warm-up completes before reservation and submit")
-    func automaticWarmupOrdering() throws {
+    @Test("automatic room binding completes before reservation and submit")
+    func automaticBindingOrdering() throws {
         let database = MockDatabase(chat: target)
         database.confirmedLogID = 109
         let state = MockState()
         let ui = MockUI()
         let request = SendRequest(
-            requestID: UUID(), destination: .chatID(target.id), body: "after warm-up"
+            requestID: UUID(), destination: .chatID(target.id), body: "after binding"
         )
         ui.onPrepare = {
             let attempt = try state.sendAttempt(requestID: request.requestID)
@@ -388,8 +409,8 @@ struct SafeSendTests {
         #expect(ui.calls == 1)
     }
 
-    @Test("standalone warm-up writes no send state and never submits")
-    func standaloneWarmupIsNoSend() throws {
+    @Test("standalone room binding writes no send state and never submits")
+    func standaloneBindingIsNoSend() throws {
         let state = MockState()
         let ui = MockUI()
         ui.warmupStatus = .opened
@@ -410,8 +431,8 @@ struct SafeSendTests {
         #expect(state.attemptCount == 0)
     }
 
-    @Test("database identity drift after warm-up blocks reservation and submit")
-    func warmupIdentityDrift() throws {
+    @Test("database identity drift after binding blocks reservation and submit")
+    func bindingIdentityDrift() throws {
         let database = MockDatabase(chat: target)
         let state = MockState()
         let ui = MockUI()
@@ -505,8 +526,8 @@ struct SafeSendTests {
         #expect(ui.calls == 1)
     }
 
-    @Test("warm-up failure is retry-safe and creates no reservation")
-    func warmupFailureCreatesNoReservation() throws {
+    @Test("binding failure is retry-safe and creates no reservation")
+    func bindingFailureCreatesNoReservation() throws {
         let state = MockState()
         let ui = MockUI()
         ui.prepareError = .preconditionFailed("activation changed")
@@ -524,6 +545,36 @@ struct SafeSendTests {
         )
 
         #expect(throws: KakaoClientError.self) { try coordinator.send(request) }
+        #expect(ui.prepareCalls == 1)
+        #expect(ui.calls == 0)
+        #expect(state.attemptCount == 0)
+    }
+
+    @Test("a closed room returns needs_user_open without reserving or submitting")
+    func closedRoomNeedsUserOpen() throws {
+        let state = MockState()
+        let ui = MockUI()
+        ui.prepareError = .needsUserOpen("open the exact room")
+        let coordinator = SafeSendCoordinator(
+            database: MockDatabase(chat: target),
+            state: state,
+            ui: ui,
+            roomPreparer: ui,
+            transactionLock: MockLock(),
+            confirmationAttempts: 1,
+            confirmationDelay: 0
+        )
+        let request = SendRequest(
+            requestID: UUID(), destination: .chatID(target.id), body: "not composed"
+        )
+
+        do {
+            _ = try coordinator.send(request)
+            Issue.record("Expected needs_user_open")
+        } catch let error as KakaoClientError {
+            #expect(error == .needsUserOpen("open the exact room"))
+            #expect(error.description == "needs_user_open: open the exact room")
+        }
         #expect(ui.prepareCalls == 1)
         #expect(ui.calls == 0)
         #expect(state.attemptCount == 0)
@@ -1066,6 +1117,18 @@ private let certifiedCompositionElements = [
     CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
     CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
     CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:54"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
+    CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
+    CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),
+]
+
+private let legacyCertifiedCompositionElements = [
+    CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:29"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:164"),
+    CompositionElementEvidence(role: kAXStaticTextRole as String, identifier: "_NS:144"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:10"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:30"),
+    CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:42"),
     CompositionElementEvidence(role: kAXButtonRole as String, identifier: "_NS:78"),
     CompositionElementEvidence(role: kAXSliderRole as String, identifier: "_NS:182"),
     CompositionElementEvidence(role: kAXScrollAreaRole as String, identifier: "_NS:47"),

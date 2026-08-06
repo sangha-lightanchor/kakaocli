@@ -210,7 +210,7 @@ public final class LocalServiceServer: @unchecked Sendable {
             payload = try encoder.encode(try await client.send(sendRequest))
         case "warmup_v2":
             guard let destination = request.destination else {
-                throw KakaoClientError.invalidRequest("Service warm-up request is missing its destination")
+                throw KakaoClientError.invalidRequest("Service room-binding request is missing its destination")
             }
             payload = try encoder.encode(try await client.warmup(destination: destination))
         case "archive_status":

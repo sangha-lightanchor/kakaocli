@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.1.1 — Durable log-ID confirmation
+
+- Exclude KakaoTalk's temporary outgoing-row sentinel `Int64.max` from message
+  reads, per-chat high-water marks, incremental reads, and exact-byte send
+  confirmation. Confirmation now waits for the durable server log ID.
+- Reject the sentinel in confirmed state claims. On startup, demote any receipt
+  persisted by an older build with that placeholder to `unknown` so replaying
+  the same UUID performs read-only reconciliation and never sends again.
+- Add regression tests for both source-database filtering and durable-state
+  rejection/migration guards.
+
+## 1.1.0 — Already-open room bridge
+
+- Remove every application-activation and chat-row context-menu path from the
+  active source. Sending now requires one already-open, database-unique exact
+  room and never navigates KakaoTalk.
+- Return the explicit retry-safe `needs_user_open` result before reservation or
+  composition when the exact room is closed. The compatibility `warmup` command
+  now verifies a room; it no longer opens one.
+- Bind the Kakao process, launch identity, complete window set, exact room,
+  composer, and foreground process before any message bytes enter the composer.
+- Preserve the five-second empty-composer settle window, exact Send-control
+  action, durable UUID idempotency, and exact per-chat database confirmation.
+- Add source guards prohibiting activation, row menus, focus/selection changes,
+  and keyboard/mouse input anywhere in the active package.
+
+## 1.0.10 — Exact-row timing and post-send settling
+
+- Reuse an already-open, database-unique exact target room whether KakaoTalk's
+  main Chats window is rendered or hidden; retain exact row/table proof for
+  opening a closed target.
+- Accept the separately certified legacy Kakao 26.x empty-composer fingerprint
+  (`_NS:30` and `_NS:42`) without weakening any child-count, empty-state, or
+  exact Send-control checks.
+- Move exact row/window binding and pre-existing top-level menu enumeration
+  ahead of temporary activation, then use anchored checks during the short
+  foreground interval so long chat histories cannot consume that interval.
+- Restrict native context-menu discovery to KakaoTalk's top-level Accessibility
+  children, where macOS exposes contextual menus, instead of traversing chat
+  lists and message histories.
+- Allow an already-open exact target with an empty composer up to five seconds
+  to finish KakaoTalk's post-send UI transition. A non-empty composer, changed
+  window identity, changed unrelated room, or unresolved structure still fails
+  closed without composition or delivery.
+- Reject malformed `AXWindows` results such as KakaoTalk's transient duplicate
+  `AXApplication` objects and fall back only to direct children whose role is
+  exactly `AXWindow`.
+
 ## 1.0.9 — Stable background restoration
 
 - Recheck and, when KakaoTalk reacquires the foreground while an exact room

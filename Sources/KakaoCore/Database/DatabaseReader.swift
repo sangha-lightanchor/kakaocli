@@ -16,6 +16,11 @@ public protocol KakaoDatabaseAccess: AnyObject, Sendable {
 /// A persistent, read-only SQLCipher connection to KakaoTalk's local database.
 /// Callers serialize access through `KakaoClient`.
 public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
+    /// KakaoTalk temporarily assigns this local-only placeholder to a newly
+    /// submitted outgoing row before replacing it with the server log ID.
+    /// It is never durable confirmation evidence.
+    static let transientOutgoingLogID = Int64.max
+
     private var db: OpaquePointer?
     public let databasePath: String
 
@@ -187,8 +192,8 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
         since: Date? = nil,
         limit: Int = 50
     ) throws -> [Message] {
-        var conditions: [String] = []
-        var bindings: [SQLValue] = []
+        var conditions: [String] = ["m.logId < ?"]
+        var bindings: [SQLValue] = [.int64(Self.transientOutgoingLogID)]
         if let chatID {
             conditions.append("m.chatId = ?")
             bindings.append(.int64(chatID.rawValue))
@@ -219,11 +224,11 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
         let sql: String
         let bindings: [SQLValue]
         if let chatID {
-            sql = "SELECT MAX(logId) FROM NTChatMessage WHERE chatId = ?"
-            bindings = [.int64(chatID.rawValue)]
+            sql = "SELECT MAX(logId) FROM NTChatMessage WHERE chatId = ? AND logId < ?"
+            bindings = [.int64(chatID.rawValue), .int64(Self.transientOutgoingLogID)]
         } else {
-            sql = "SELECT MAX(logId) FROM NTChatMessage"
-            bindings = []
+            sql = "SELECT MAX(logId) FROM NTChatMessage WHERE logId < ?"
+            bindings = [.int64(Self.transientOutgoingLogID)]
         }
         return try query(sql, bindings: bindings) { $0.optionalInt64(0) }.first.flatMap { $0 } ?? 0
     }
@@ -235,12 +240,17 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
                    m.message, m.type, m.sentAt, m.attachment
             FROM NTChatMessage m
             LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
-            WHERE m.logId > ?
+            WHERE m.logId > ? AND m.logId < ?
             ORDER BY m.logId ASC
             LIMIT ?
             """
         let ownID = try myUserID()
-        return try query(sql, bindings: [.int64(logID), .int(max(1, limit))]) {
+        return try query(
+            sql,
+            bindings: [
+                .int64(logID), .int64(Self.transientOutgoingLogID), .int(max(1, limit)),
+            ]
+        ) {
             Self.makeMessage(row: $0, ownID: ownID)
         }
     }
@@ -251,14 +261,17 @@ public final class DatabaseReader: KakaoDatabaseAccess, @unchecked Sendable {
         let sql = """
             SELECT m.logId
             FROM NTChatMessage m
-            WHERE m.chatId = ? AND m.logId > ? AND m.authorId = ?
+            WHERE m.chatId = ? AND m.logId > ? AND m.logId < ? AND m.authorId = ?
               AND CAST(m.message AS BLOB) = ?
             ORDER BY m.logId ASC
             LIMIT 1
             """
         return try query(
             sql,
-            bindings: [.int64(chatID.rawValue), .int64(logID), .int64(try myUserID()), .blob(body)]
+            bindings: [
+                .int64(chatID.rawValue), .int64(logID),
+                .int64(Self.transientOutgoingLogID), .int64(try myUserID()), .blob(body),
+            ]
         ) { $0.int64(0) }.first
     }
 

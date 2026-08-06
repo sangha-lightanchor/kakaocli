@@ -105,6 +105,7 @@ public enum KakaoClientError: Error, CustomStringConvertible, Equatable {
     case chatNotFound(ChatID)
     case selfChatNotFound
     case requestIDConflict(UUID)
+    case needsUserOpen(String)
     case uiPrecondition(String)
     case state(String)
 
@@ -115,6 +116,7 @@ public enum KakaoClientError: Error, CustomStringConvertible, Equatable {
         case .selfChatNotFound: return "Self-chat was not found"
         case .requestIDConflict(let id):
             return "Request ID \(id.uuidString) was already used with different content"
+        case .needsUserOpen(let message): return "needs_user_open: \(message)"
         case .uiPrecondition(let message): return message
         case .state(let message): return message
         }
